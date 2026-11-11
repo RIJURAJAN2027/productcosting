@@ -1,0 +1,41 @@
+# --- Never commit customer data -------------------------------------------
+# Trial balances, legacy workbooks and exports contain confidential figures.
+*.xlsx
+*.xlsm
+*.xls
+*.csv
+!frontend/public/**/*.csv
+data/
+uploads/
+exports/
+backups/
+*.dump
+*.sql.gz
+
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.coverage
+htmlcov/
+
+# --- Node -----------------------------------------------------------------
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# --- Environment / IDE ----------------------------------------------------
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.log
+.DS_Store
