@@ -65,3 +65,47 @@ def test_controls_flag_known_workbook_defects(imported):
     # amounts the workbook drops / plugs are reported, not hidden
     assert by_code["np_category_not_in_pnl"].level == "error"
     assert "allocation_plugs" in by_code
+
+
+def test_legacy_import_through_api_and_database_roundtrip(tmp_path):
+    """Import via the API, store masters/rules/lines/TBs in the database, rebuild the engine
+    configuration from the database, calculate a run and compare it with the workbook again."""
+    import os as _os
+    from fastapi.testclient import TestClient
+
+    old_url = _os.environ.get("PC_DATABASE_URL")
+    _os.environ["PC_DATABASE_URL"] = f"sqlite+pysqlite:///{tmp_path / 'rt.db'}"
+    from app.db import SessionLocal, reset_engine
+    from app.main import create_app
+    from app.models import CalcRun, Company, Period
+    from app.services.runs import load_result
+    from app.settings import get_settings
+
+    get_settings.cache_clear()
+    reset_engine()
+    with TestClient(create_app()) as client:
+        s = get_settings()
+        tok = client.post("/api/auth/login", json={"email": s.bootstrap_admin_email,
+                                                   "password": s.bootstrap_admin_password}).json()["access_token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        cid = client.post("/api/companies", headers=h, json={"code": "LEGACY", "name": "Legacy import"}).json()["id"]
+        with open(WORKBOOK, "rb") as f:
+            r = client.post(f"/api/companies/{cid}/legacy-import", headers=h,
+                            data={"period_code": "YTD", "period_label": "Legacy YTD", "end_date": "2026-09-30",
+                                  "start_date": "2026-04-01"}, files={"file": ("wb.xlsx", f.read())})
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert out["regression"]["mismatches"] == 0
+        run = client.post(f"/api/companies/{cid}/periods/{out['period_id']}/runs", headers=h, json={})
+        assert run.status_code == 201, run.text
+        db = SessionLocal()
+        result = load_result(db, db.get(CalcRun, run.json()["id"]))
+        db.close()
+    imp = LegacyWorkbookImporter(WORKBOOK)
+    imp.run()
+    cmp = compare_with_workbook(imp, result, tolerance_rupees=1.0)
+    if old_url is not None:
+        _os.environ["PC_DATABASE_URL"] = old_url
+    get_settings.cache_clear()
+    reset_engine()
+    assert cmp.mismatches.empty, cmp.mismatches.head(20).to_string()
