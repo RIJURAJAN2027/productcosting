@@ -95,7 +95,25 @@ def change_password(body: PasswordIn, user: User = Depends(get_current_user), db
 
 
 # ----------------------------------------------------------------------- SSO (OpenID Connect)
-_STATES: dict[str, dt.datetime] = {}
+SSO_STATE_MINUTES = 10
+
+
+def _sso_state() -> str:
+    """Signed, short-lived OAuth state. It is stateless, so the callback may reach any server
+    process or serverless instance."""
+    import jwt as pyjwt
+    payload = {"typ": "sso_state", "nonce": secrets.token_urlsafe(16),
+               "exp": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=SSO_STATE_MINUTES)}
+    return pyjwt.encode(payload, get_settings().secret_key, algorithm="HS256")
+
+
+def _check_sso_state(state: str) -> bool:
+    import jwt as pyjwt
+    try:
+        claims = pyjwt.decode(state, get_settings().secret_key, algorithms=["HS256"])
+    except pyjwt.PyJWTError:
+        return False
+    return claims.get("typ") == "sso_state"
 
 
 def _oidc_metadata() -> dict:
@@ -118,8 +136,7 @@ def sso_login():
     if not (s.oidc_issuer and s.oidc_client_id and s.oidc_redirect_uri):
         raise HTTPException(404, "SSO is not configured")
     meta = _oidc_metadata()
-    state = secrets.token_urlsafe(24)
-    _STATES[state] = dt.datetime.now(dt.timezone.utc)
+    state = _sso_state()
     q = urllib.parse.urlencode({"response_type": "code", "client_id": s.oidc_client_id,
                                 "redirect_uri": s.oidc_redirect_uri, "scope": "openid email profile",
                                 "state": state})
@@ -131,8 +148,7 @@ def sso_callback(code: str, state: str, db: Session = Depends(get_db)):
     import httpx
     import jwt as pyjwt
     s = get_settings()
-    issued = _STATES.pop(state, None)
-    if issued is None or (dt.datetime.now(dt.timezone.utc) - issued).total_seconds() > 600:
+    if not _check_sso_state(state):
         raise HTTPException(400, "Invalid or expired SSO state")
     meta = _oidc_metadata()
     tok = httpx.post(meta["token_endpoint"], data={

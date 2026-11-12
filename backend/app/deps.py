@@ -28,10 +28,13 @@ def get_current_user(cred: HTTPAuthorizationCredentials | None = Depends(bearer)
                             headers={"WWW-Authenticate": "Bearer"})
     try:
         payload = decode_token(cred.credentials)
+        if payload.get("typ", "access") != "access":
+            raise ValueError("not an access token")
+        user_id = int(payload["sub"])
     except Exception:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token",
                             headers={"WWW-Authenticate": "Bearer"})
-    user = db.get(User, int(payload["sub"]))
+    user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "User disabled or not found")
     return user

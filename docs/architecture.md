@@ -16,6 +16,12 @@ One container image serves the API and the built single-page application; a seco
 PostgreSQL (or use a managed database). Several Uvicorn worker processes handle requests; there is
 no other moving part (no queue or cache server) – a full calculation takes well under a second.
 
+The same code also runs serverless on Vercel (`vercel.json`): the web interface is a static service,
+the API a Python function, and the database a hosted PostgreSQL (e.g. Neon). In that mode connections
+are not pooled in the function (the provider's pooler does it), the schema is migrated and the first
+administrator created on the first request under PostgreSQL advisory locks, and single-sign-on state
+is a signed token, so any instance can complete a login.
+
 ## Backend modules
 
 | Module | Responsibility |

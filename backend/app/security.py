@@ -39,7 +39,7 @@ def password_problems(password: str) -> list[str]:
 def create_access_token(user_id: int, tenant_id: int, role: str, minutes: int | None = None) -> str:
     s = get_settings()
     exp = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=minutes or s.access_token_minutes)
-    payload = {"sub": str(user_id), "tid": tenant_id, "role": role, "exp": exp,
+    payload = {"sub": str(user_id), "tid": tenant_id, "role": role, "exp": exp, "typ": "access",
                "iat": dt.datetime.now(dt.timezone.utc)}
     return jwt.encode(payload, s.secret_key, algorithm=ALGORITHM)
 

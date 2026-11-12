@@ -47,8 +47,17 @@ Open <http://localhost:8080> and sign in with `PC_BOOTSTRAP_ADMIN_EMAIL` /
 created on first start (`PC_LOAD_DEMO_COMPANY=false` to skip it).
 
 To set up your own company from the legacy workbook: *Administration → Company & settings → New
-company*, select it, then *Administration → Import legacy workbook*. See the
-[admin guide](docs/admin-guide.md).
+company*, select it, then *Administration → Import legacy workbook*. The import is checked against
+every value of the workbook and then corrects known workbook errors (plugs, GLs that never reach the
+P&L), listing each correction and its effect. See the [admin guide](docs/admin-guide.md).
+
+## Deploy on Vercel
+
+The repository includes a `vercel.json` (web interface and API as two Vercel Services). Import the
+repository in Vercel, set `PC_SECRET_KEY`, `PC_BOOTSTRAP_ADMIN_EMAIL` and
+`PC_BOOTSTRAP_ADMIN_PASSWORD`, deploy, connect a Neon Postgres database under *Storage* and redeploy.
+The database tables and the first administrator are created on the first request. Details and
+limits: [admin guide – Vercel](docs/admin-guide.md#vercel-serverless).
 
 ## Development
 

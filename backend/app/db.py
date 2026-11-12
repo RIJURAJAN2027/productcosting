@@ -6,7 +6,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from .settings import get_settings
 
@@ -28,6 +28,10 @@ def get_engine():
             kwargs["connect_args"] = {"check_same_thread": False}
             if ":memory:" in s.database_url:
                 kwargs["poolclass"] = StaticPool
+        elif s.serverless:
+            # serverless functions: no pool kept between invocations (the provider's pooler, e.g. Neon's,
+            # does the pooling) and no server-side prepared statements (not safe behind PgBouncer)
+            kwargs.update(poolclass=NullPool, connect_args={"prepare_threshold": None})
         else:
             kwargs.update(pool_pre_ping=True, pool_size=10, max_overflow=20)
         _engine = create_engine(s.database_url, **kwargs)

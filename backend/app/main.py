@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, select
 
 from . import __version__
 from .api import admin, auth, masters, periods, runs
 from .db import Base, get_engine, session_scope
+from .migrate import BOOTSTRAP_LOCK, advisory_xact_lock, migrate
 from .models import Tenant, User
 from .security import hash_password
 from .settings import get_settings
@@ -64,19 +67,41 @@ def create_app() -> FastAPI:
                 return FileResponse(target)
             return FileResponse(dist / "index.html")
 
+    app.state.initialized = False
+    init_lock = threading.Lock()
+
+    def ensure_initialized() -> None:
+        if app.state.initialized:
+            return
+        with init_lock:
+            if not app.state.initialized:
+                init_db()
+                app.state.initialized = True
+
     @app.on_event("startup")
     def startup() -> None:
-        init_db()
+        ensure_initialized()
+
+    @app.middleware("http")
+    async def initialize_on_first_request(request, call_next):
+        # serverless platforms may not run start-up events: prepare the database on first use
+        if not app.state.initialized:
+            await run_in_threadpool(ensure_initialized)
+        return await call_next(request)
     return app
 
 
 def init_db() -> None:
-    """Create tables for SQLite / first start, then bootstrap the first tenant and admin."""
+    """Prepare the database: create the tables (SQLite / development) or run the migrations
+    (``auto_migrate``, e.g. on Vercel), then create the first tenant and admin when it is empty."""
     s = get_settings()
     engine = get_engine()
-    if s.is_sqlite or s.env in ("development", "test"):
+    if s.auto_migrate:
+        migrate()
+    elif s.is_sqlite or s.env in ("development", "test"):
         Base.metadata.create_all(engine)
     with session_scope() as db:
+        advisory_xact_lock(db, BOOTSTRAP_LOCK)       # only one process creates the first admin
         if db.scalar(select(func.count(Tenant.id))):
             return
         tenant = Tenant(name=s.bootstrap_tenant, slug="default", license_plan="standard",

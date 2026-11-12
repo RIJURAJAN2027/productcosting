@@ -86,6 +86,45 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --proxy-headers
 On Windows Server, run the same commands in PowerShell and register uvicorn as a service (e.g. with
 NSSM), or use Docker Desktop / WSL2.
 
+### Vercel (serverless)
+
+The repository contains a `vercel.json` that deploys the web interface and the API as two Vercel
+Services of one project (the API answers `/api`, `/docs` and `/redoc`; everything else is the web
+interface). Vercel has no permanent disk, so the data lives in a hosted PostgreSQL database.
+
+1. **Import the repository** in Vercel (*Add New → Project*), keep the root directory `./` – Vercel
+   reads `vercel.json` and shows the two services.
+2. **Environment variables** (Production and Preview):
+
+   | Variable | Value |
+   |---|---|
+   | `PC_SECRET_KEY` | a random string of 32+ characters (e.g. run `crypto.randomUUID() + crypto.randomUUID()` in a browser console) |
+   | `PC_BOOTSTRAP_ADMIN_EMAIL` | the first administrator's e-mail |
+   | `PC_BOOTSTRAP_ADMIN_PASSWORD` | their first password (10+ characters, upper and lower case, a digit) |
+   | `PC_BOOTSTRAP_TENANT` | your organisation's name |
+   | `PC_LOAD_DEMO_COMPANY` | `true` to add the fictional demo company, `false` for none |
+
+3. **Deploy**, then add the database: *Storage → Create Database → Neon (Postgres)*, choose a region
+   close to your users, and connect it to the project with the default variable names (this sets
+   `DATABASE_URL`; with a custom prefix, set `PC_DATABASE_URL` to the connection string yourself).
+   **Redeploy** so the functions see it.
+4. Open the deployment URL and sign in. On the first request the application creates the database
+   tables and the first administrator itself (no start-up script is needed); concurrent first
+   requests are serialised with database locks.
+
+Notes:
+
+* On Vercel the application runs in production mode unless `PC_ENV` says otherwise, and it refuses
+  to start without a database, a secret key or with the default admin password (the error is in the
+  function logs).
+* Limits per request: about **4.5 MB** of upload (trial balances are normally far smaller; import a
+  larger legacy workbook with the command line, see section 5), 300 seconds and 2 GB of memory on
+  the Hobby plan – a legacy-workbook import takes about half a minute and 0.6 GB.
+* Vercel's Hobby plan is for personal, non-commercial use; use a Pro plan for a company's
+  production data, and keep previews pointed at a separate database if they should not see it.
+* Single sign-on works across serverless instances (its state is a signed token); register
+  `https://<your-domain>/api/auth/sso/callback` as the redirect URI.
+
 ## 2. Configuration reference
 
 All settings are environment variables prefixed `PC_` (see `backend/app/settings.py`).
@@ -100,6 +139,8 @@ All settings are environment variables prefixed `PC_` (see `backend/app/settings
 | `PC_CORS_ORIGINS` | empty | only when the UI is served from another origin |
 | `PC_LOAD_DEMO_COMPANY` | true | create the fictional demo company on first start |
 | `PC_OIDC_*` | empty | single sign-on, below |
+| `DATABASE_URL` / `POSTGRES_URL` | – | used when `PC_DATABASE_URL` is not set (hosted PostgreSQL such as Neon) |
+| `PC_AUTO_MIGRATE` | on for Vercel | migrate the schema and create the first admin on the first request |
 | `WEB_CONCURRENCY` | 2 | server processes (≈ number of CPU cores) |
 
 Company settings are edited in the application (*Administration → Company & settings*): display unit,
@@ -156,20 +197,50 @@ Each company has its own masters, periods and runs. To set up a company from the
 The importer reads the workbook's formulas and builds the plants, product groups, business areas, GL
 accounts, cost centres, categories, PRE functions, allocation rules, P&L lines and the report
 layouts. With a period it also loads the two trial balances, manual edits in the calculation sheets
-(as adjustment rules with a reason), the worked-out material cost and the MIS figures, calculates and
-**compares every value with the workbook** (tolerance ₹1). The result lists the cells compared per
-section and any differences, plus importer notes (formulas it simplified, plugs, cells it could not
-translate).
+(as adjustment rules with a reason), the worked-out material cost and the MIS figures.
 
-The same check runs without the database:
+**Import check.** The imported configuration is calculated on the workbook's own trial balances and
+**every value is compared with the workbook** (tolerance ₹1) – before any correction – so the import
+is proven to reproduce the workbook.
+
+**Corrections of workbook errors** (both on by default; untick them to import the workbook as it is):
+
+* *Plugs* – fixed amounts typed into allocation formulas (e.g. `= pool × share − 0.5`) and amounts
+  added to report figures are removed: every pool is then shared out by its basis only and the
+  reports show calculated values.
+* *GLs whose category never reaches the P&L* – a GL whose category has no row in the workbook's
+  reallocation sheet is silently left out of the workbook's P&L. Such a GL is mapped to the category
+  that the other GLs with the same FS description use (largest amount first); the GL master keeps a
+  note of the old and new category. A GL with no such peers stays flagged by the controls.
+
+The result lists every correction (where, workbook cell, amount), profit before tax by plant before
+and after, the controls before and after, and every report value that changed. Review it before
+calculating; any correction can be changed afterwards in *Masters*.
+
+The same check runs without the database, and `--excel` writes a reconciliation workbook (summary,
+corrections, changed values) for sign-off of the corrected baseline:
 
 ```bash
+cd backend
+python -m app.cli verify-workbook ~/workbook.xlsx                  # import check only
+python -m app.cli verify-workbook ~/workbook.xlsx --fix --excel reconciliation.xlsx
+# with Docker
 docker compose cp ~/workbook.xlsx app:/tmp/workbook.xlsx
-docker compose exec app python -m app.cli verify-workbook /tmp/workbook.xlsx
+docker compose exec app python -m app.cli verify-workbook /tmp/workbook.xlsx --fix
 docker compose exec app rm /tmp/workbook.xlsx
-# or, from a source checkout
-cd backend && python -m app.cli verify-workbook ~/workbook.xlsx
 ```
+
+**Large workbooks.** Uploads through the browser are limited by the server (about 4.5 MB on Vercel).
+A larger workbook is imported from any computer with Python, straight into the database:
+
+```bash
+cd backend && pip install -r requirements.txt
+PC_DATABASE_URL='postgresql://user:password@host/db?sslmode=require' \
+  python -m app.cli import-workbook ~/workbook.xlsx --company MAIN --name "My Company" \
+  --period 2026-09 --label "YTD Apr-Sep 2026" --start 2026-04-01 --end 2026-09-30
+```
+
+Add `--replace` to re-import into an existing company and `--no-fix` to skip the corrections.
 
 After the import, maintain the masters in the application (or with the masters Excel export /
 import) – the workbook is no longer needed.

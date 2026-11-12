@@ -49,6 +49,10 @@ async function request<T>(method: string, path: string, body?: unknown, raw = fa
     token.clear();
     onUnauthorized();
   }
+  if (res.status === 413) {
+    throw new ApiError(413, "The file is larger than this server accepts (about 4.5 MB on Vercel). Import it with " +
+      "the command-line tool instead – see the admin guide (python -m app.cli import-workbook).", null);
+  }
   if (!res.ok) {
     let detail: unknown = res.statusText;
     try {

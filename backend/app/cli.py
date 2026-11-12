@@ -3,7 +3,10 @@
     python -m app.cli init                     migrate the database to the latest schema and create the
                                                first organisation / admin user (and the demo company)
     python -m app.cli verify-workbook FILE     rebuild a legacy "Product costing" workbook with the engine
-                                               and compare every value with the workbook (no database needed)
+                                               and compare every value with the workbook (no database needed);
+                                               --fix / --excel FILE also show the import corrections' effect
+    python -m app.cli import-workbook FILE --company CODE [--period CODE ...]
+                                               import a legacy workbook straight into the database
     python -m app.cli set-password EMAIL       set a user's password (reads it from PC_NEW_PASSWORD or asks)
     python -m app.cli create-admin EMAIL       create an extra administrator in the first organisation
 """
@@ -34,29 +37,9 @@ def _wait_for_database(timeout_s: int = 90) -> None:
             time.sleep(2)
 
 
-def migrate() -> None:
-    """Upgrade the schema with Alembic (SQLite development databases are created directly)."""
-    from alembic import command
-    from alembic.config import Config
-
-    from .db import Base, get_engine
-    from .settings import get_settings
-
-    s = get_settings()
-    if s.is_sqlite:
-        Base.metadata.create_all(get_engine())
-        return
-    root = Path(__file__).resolve().parents[1]
-    cfg = Config(str(root / "alembic.ini"))
-    cfg.set_main_option("script_location", str(root / "alembic"))
-    cfg.attributes["configure_logger"] = False
-    with get_engine().begin() as conn:
-        cfg.attributes["connection"] = conn
-        command.upgrade(cfg, "head")
-
-
 def cmd_init(_: argparse.Namespace) -> None:
     from .main import init_db
+    from .migrate import migrate
     from .settings import get_settings
 
     s = get_settings()
@@ -68,7 +51,9 @@ def cmd_init(_: argparse.Namespace) -> None:
 
 
 def cmd_verify_workbook(args: argparse.Namespace) -> None:
-    from .engine import CostingEngine, EngineConfig, EngineInputs
+    from .engine import EngineConfig
+    from .importers.corrections import (CorrectionOptions, apply_corrections, calculate, correction_effect,
+                                        reconciliation_workbook)
     from .importers.legacy_reference import compare_with_workbook
     from .importers.legacy_workbook import LegacyWorkbookImporter
 
@@ -76,7 +61,7 @@ def cmd_verify_workbook(args: argparse.Namespace) -> None:
     imp = LegacyWorkbookImporter(Path(args.file).read_bytes())
     res = imp.run()
     cfg = EngineConfig.from_dict(res.config)
-    result = CostingEngine(cfg, EngineInputs(res.ba_tb, res.cc_tb, res.adjustments, {}, res.mc_adjustments)).run()
+    result = calculate(res)
     cmp = compare_with_workbook(imp, result, tolerance_rupees=args.tolerance)
     summary = cmp.summary()
     print(f"Imported: {len(cfg.plants)} plants, {len(cfg.product_groups)} product groups, "
@@ -96,7 +81,75 @@ def cmd_verify_workbook(args: argparse.Namespace) -> None:
     counts = res.note_counts()
     if counts:
         print("\nImporter notes:", ", ".join(f"{v} {k}" for k, v in counts.items()))
+    if args.fix or args.excel:
+        changes = apply_corrections(res, CorrectionOptions())
+        after = calculate(res)
+        effect = correction_effect(result, after, (res.config.get("meta") or {}).get("pbt_line"))
+        print(f"\nCorrections ({len(changes)}):")
+        for c in changes:
+            print(f"  {c['kind']:24s} {c['where'][:70]:70s} {c['amount']:+,.6f}  {c.get('source') or ''}")
+        print("\nProfit before tax (before -> after corrections):")
+        for r in effect["pbt"]:
+            name = "Company" if r["plant"] == "__ALL__" else r["plant"]
+            print(f"  {name:10s} {r['before']:14,.6f} -> {r['after']:14,.6f}  ({r['change']:+,.6f})")
+        print("\nControls (before -> after):")
+        for c in effect["controls"]:
+            print(f"  {c['after_level'].upper():8s} {c['title']}: {c['before']:,.6f} -> {c['after']:,.6f}")
+        print(f"\nReport values changed by the corrections: {effect['values_changed']} in "
+              f"{len(effect['lines_changed'])} lines: {', '.join(effect['lines_changed'])}")
+        if args.excel:
+            Path(args.excel).write_bytes(reconciliation_workbook(changes, effect))
+            print(f"Reconciliation written to {args.excel}")
     sys.exit(1 if len(cmp.mismatches) else 0)
+
+
+def cmd_import_workbook(args: argparse.Namespace) -> None:
+    """Import a legacy workbook into a company straight into the database – for workbooks larger
+    than the hosting platform's upload limit (about 4.5 MB on Vercel)."""
+    import datetime as dt
+
+    from .db import SessionLocal
+    from .importers.corrections import CorrectionOptions
+    from .main import init_db
+    from .migrate import migrate
+    from .models import Company, Tenant
+    from .services.config_builder import DEFAULT_SETTINGS
+    from .services.legacy_import import import_legacy
+
+    _wait_for_database()
+    migrate()
+    init_db()
+    db = SessionLocal()
+    try:
+        tenant = db.scalar(select(Tenant).order_by(Tenant.id))
+        company = db.scalar(select(Company).where(Company.tenant_id == tenant.id, Company.code == args.company))
+        if company is None:
+            company = Company(tenant_id=tenant.id, code=args.company, name=args.name or args.company,
+                              settings=dict(DEFAULT_SETTINGS))
+            db.add(company)
+            db.flush()
+        elif not args.replace:
+            raise SystemExit(f"Company {args.company} already exists; add --replace to replace its masters.")
+        fix = not args.no_fix
+        out = import_legacy(db, company, Path(args.file).read_bytes(), Path(args.file).name, None,
+                            args.period, args.label, dt.date.fromisoformat(args.end) if args.end else None,
+                            dt.date.fromisoformat(args.start) if args.start else None,
+                            corrections=CorrectionOptions(remove_plugs=fix, map_unused_categories=fix))
+    finally:
+        db.close()
+    reg = out.get("regression") or {}
+    print(f"Imported into company {args.company}: " + ", ".join(f"{v} {k.replace('_', ' ')}"
+                                                                for k, v in out["counts"].items()))
+    print(f"Import check: {reg.get('cells_compared', 0)} workbook values compared, "
+          f"{reg.get('mismatches', 0)} differ by more than Rs 1.")
+    corr = out.get("corrections") or {}
+    for c in corr.get("changes") or []:
+        print(f"  corrected: {c['kind'].replace('_', ' ')} – {c['where']} ({c['amount']:+,.6f})")
+    for r in ((corr.get("effect") or {}).get("pbt") or []):
+        if r["plant"] == "__ALL__":
+            print(f"Company PBT {r['before']:,.6f} -> {r['after']:,.6f} ({r['change']:+,.6f}) after the corrections")
+    if out.get("period_id"):
+        print(f"Period {args.period} loaded with the workbook's trial balances; calculate it in the application.")
 
 
 def cmd_set_password(args: argparse.Namespace) -> None:
@@ -144,7 +197,22 @@ def main(argv: list[str] | None = None) -> None:
     v.add_argument("file")
     v.add_argument("--tolerance", type=float, default=1.0, help="tolerance in rupees (default 1)")
     v.add_argument("--show", type=int, default=25, help="mismatches to list")
+    v.add_argument("--fix", action="store_true",
+                   help="also apply the import corrections (remove plugs, map GLs whose category is not in the "
+                        "P&L) and show their effect")
+    v.add_argument("--excel", metavar="FILE", help="write a reconciliation workbook of the corrections (implies --fix)")
     v.set_defaults(func=cmd_verify_workbook)
+    iw = sub.add_parser("import-workbook", help="import a legacy workbook into a company (no upload limit)")
+    iw.add_argument("file")
+    iw.add_argument("--company", required=True, help="company code (created if it does not exist)")
+    iw.add_argument("--name", help="company name for a new company")
+    iw.add_argument("--replace", action="store_true", help="replace the masters of an existing company")
+    iw.add_argument("--period", help="period code, e.g. 2026-09 (loads the workbook's trial balances)")
+    iw.add_argument("--label", help="period label, e.g. 'YTD Apr-Sep 2026'")
+    iw.add_argument("--start", help="period start date YYYY-MM-DD")
+    iw.add_argument("--end", help="period end date YYYY-MM-DD")
+    iw.add_argument("--no-fix", action="store_true", help="import as-is, without the error corrections")
+    iw.set_defaults(func=cmd_import_workbook)
     sp = sub.add_parser("set-password", help="set a user's password")
     sp.add_argument("email")
     sp.set_defaults(func=cmd_set_password)
