@@ -328,6 +328,24 @@ def test_long_table_and_drilldown():
     assert rows["value"].sum() == pytest.approx(res.engine.component("Power", "common")[0, 0])
 
 
+def test_drilldown_follows_overrides_pins_and_totals():
+    cfg = base_config()
+    cfg.lines.append({"code": "x", "label": "X", "expr": "[L:sales] + 2 * [L:power]", "plant_exprs": {"P2": "[L:power]"},
+                      "cell_exprs": {"P1|B": "[L:sales@P2|A] - 1"}, "total_exprs": {"P1": "[L:sales] * 0.5"}})
+    cfg.lines.append({"code": "y", "label": "Y", "expr": "[L:x] + [L:sales] * [L:power]"})   # non-linear term
+    res = run(cfg)
+    e = res.engine
+    for line in ("x", "y"):
+        for p in e.plants:
+            for code in [None] + e.codes:
+                parts = res.explain(line, p, code or "__TOTAL__")
+                assert sum(x["value"] for x in parts) == pytest.approx(res.value(line, p, code), abs=1e-9), (line, p, code)
+    pinned = res.explain("x", "P1", "B")
+    assert any("taken from P2" in x["label"] for x in pinned)
+    assert any(x["kind"] == "const" for x in pinned)
+    assert any(x["kind"] == "X" for x in res.explain("y", "P1", "A"))
+
+
 def test_performance_1000_gls_900_columns():
     """~1,000 GLs x ~900 business areas must calculate well under 30 seconds."""
     rng = np.random.default_rng(7)

@@ -595,16 +595,7 @@ class CostingEngine:
         return val
 
     def _eval_aggregate(self, text: str, plant: str | None) -> float:
-        def resolve(ref: ex.Ref):
-            body, _, at = ref.body.partition("@")
-            if at:
-                return self._resolve(ref)
-            if ref.kind == "L":
-                return self.aggregate_value(body, plant, None)
-            grid = self._resolve(ref)
-            rows = slice(None) if plant is None else self.pidx[plant]
-            return float(np.sum(grid[rows, :])) if isinstance(grid, np.ndarray) else float(grid)
-        return float(ex.evaluate(text, resolve))
+        return float(ex.evaluate(text, lambda r: self._agg_ref(r, plant)))
 
     def mc_adjustment_grid(self) -> np.ndarray:
         if hasattr(self, "_mcadj"):
@@ -644,16 +635,17 @@ class CostingEngine:
             if isinstance(node, ex.Num):
                 return {("const",): node.value}
             if isinstance(node, ex.Ref):
+                base = node.body.partition("@")[0]
                 if node.kind == "L":
-                    return expand_line(node.body)
+                    return expand_line(base)
                 if node.kind == "C":
-                    cat_name, _, comp = node.body.partition("|")
+                    cat_name, _, comp = base.partition("|")
                     cat = self.cat_lookup.get(norm(cat_name), cat_name)
                     comp = comp or "total"
                     if comp == "total":
                         return {("C", cat, c): 1.0 for c in ("direct", "common", "corporate")}
                     return {("C", cat, comp): 1.0}
-                return {(node.kind, node.body): 1.0}
+                return {(node.kind, base): 1.0}
             if isinstance(node, ex.UnaryNeg):
                 return {k: -v for k, v in expand_node(node.operand).items()}
             if isinstance(node, ex.BinOp):
@@ -690,6 +682,224 @@ class CostingEngine:
             return memo[c]
 
         return expand_line(code)
+
+    # ------------------------------------------------------------ drill-down
+    def _pre_leaves(self, body: str) -> list[str]:
+        """Split a PRE reference into category-level items (direct|cat, item|cat|fn, pool|fn)."""
+        parts = [p.strip() for p in body.split("|")]
+        kind = parts[0].lower()
+        cats = list(self.cfg.pre_categories)
+        if kind == "direct":
+            if len(parts) > 1:
+                cat = self.pre_cat_lookup.get(norm(parts[1]))
+                return [f"direct|{cat}"] if cat else []
+            return [f"direct|{c}" for c in cats]
+        if kind == "item":
+            cat = self.pre_cat_lookup.get(norm(parts[1]))
+            return [f"item|{cat}|{parts[2]}"] if cat else []
+        if kind == "fn":
+            return [f"item|{c}|{parts[1]}" for c in cats]
+        if kind == "group":
+            group = parts[1].lower()
+            out = self._pre_leaves("direct") if group == "factory" else []
+            for fn, info in self.functions.items():
+                if (info.get("group") or "factory").lower() == group:
+                    out += self._pre_leaves(f"fn|{fn}")
+            return out
+        return [body]
+
+    def _leaf_grid(self, kind: str, body: str) -> np.ndarray:
+        if kind == "C":
+            cat, _, comp = body.partition("|")
+            return self.component(cat, comp)
+        if kind == "P":
+            return self._pre_ref(body)
+        if kind == "MCADJ":
+            return self.mc_adjustment_grid()
+        if kind == "D":
+            return self._spec_grid({"kind": "driver", "driver": body})
+        raise EngineError(f"Unknown component kind {kind}")
+
+    def explain_cell(self, code: str, plant: str, pg: str | None) -> list[dict]:
+        """Break one reported value (a plant x PG cell, or a plant total when ``pg`` is None)
+        into base components: category parts (direct / Common / Corporate), PRE items,
+        material-cost adjustments and drivers, each with the location it was taken from.
+
+        Follows plant- and cell-specific formulas, total overrides and pinned references
+        (``@PLANT|PG``), so for linear lines the parts add up exactly to the reported value.
+        Non-linear terms (products of two references, MIN/MAX/ABS) are returned as one
+        numeric part each."""
+        TOTAL, ALL = "__TOTAL__", "__ALL__"
+        memo: dict[tuple, dict] = {}
+        fixed: dict[tuple, float] = {}
+
+        def add(out: dict, d: dict, k: float = 1.0) -> None:
+            for key, v in d.items():
+                out[key] = out.get(key, 0.0) + v * k
+
+        def leaf(kind: str, body: str, P: str, C: str) -> dict:
+            if kind == "C":
+                cat_name, _, comp = body.partition("|")
+                cat = self.cat_lookup.get(norm(cat_name))
+                if cat is None:
+                    return {}
+                comps = ("direct", "common", "corporate") if (comp or "total") == "total" else (comp,)
+                return {("C", f"{cat}|{c}", P, C): 1.0 for c in comps}
+            if kind == "P":
+                return {("P", b, P, C): 1.0 for b in self._pre_leaves(body)}
+            return {(kind, body, P, C): 1.0}
+
+        def numeric(node, P: str, C: str, aggregate: bool) -> dict:
+            if aggregate:
+                val = float(ex.evaluate(node, lambda r: self._agg_ref(r, None if P == ALL else P)))
+            else:
+                val = self._pick(self._as_grid(ex.evaluate(node, self._resolve)), f"{P}|{C}")
+            key = ("X", ex.to_text(node), P, C)
+            fixed[key] = val
+            return {key: 1.0}
+
+        def node_at(node, P: str, C: str, aggregate: bool) -> dict:
+            if isinstance(node, ex.Num):
+                return {("const", "", P, C): node.value}
+            if isinstance(node, ex.Ref):
+                body, _, at = node.body.partition("@")
+                if at:
+                    p2, c2 = split_cell_key(at)
+                    return line_at(body, p2, c2) if node.kind == "L" else leaf(node.kind, body, p2, c2)
+                if node.kind == "L":
+                    return line_agg(body, P) if aggregate else line_at(body, P, C)
+                return leaf(node.kind, body, P, TOTAL if aggregate else C)
+            if isinstance(node, ex.UnaryNeg):
+                return {k: -v for k, v in node_at(node.operand, P, C, aggregate).items()}
+            if isinstance(node, ex.BinOp):
+                a = node_at(node.left, P, C, aggregate)
+                b = node_at(node.right, P, C, aggregate)
+                if node.op in "+-":
+                    out = dict(a)
+                    add(out, b, 1.0 if node.op == "+" else -1.0)
+                    return out
+                ca = a.get(("const", "", P, C)) if len(a) == 1 else None
+                cb = b.get(("const", "", P, C)) if len(b) == 1 else None
+                if node.op == "*" and cb is not None:
+                    return {k: v * cb for k, v in a.items()}
+                if node.op == "*" and ca is not None:
+                    return {k: v * ca for k, v in b.items()}
+                if node.op == "/" and cb:
+                    return {k: v / cb for k, v in a.items()}
+                return numeric(node, P, C, aggregate)
+            if isinstance(node, ex.Call) and node.name in ("SUM", "NEG"):
+                out: dict = {}
+                for arg in node.args:
+                    add(out, node_at(arg, P, C, aggregate), -1.0 if node.name == "NEG" else 1.0)
+                return out
+            return numeric(node, P, C, aggregate)
+
+        def line_at(name: str, P: str, C: str) -> dict:
+            """Grid semantics: a cell, or the plain sum of the cells of a selection."""
+            key = (name, P, C)
+            if key in memo:
+                return memo[key]
+            memo[key] = {}
+            ln = self.lines.get(name)
+            out: dict = {}
+            if ln is not None:
+                if P != ALL and C != TOTAL:
+                    if P in self.pidx and C in self.kidx:
+                        text = ((ln.get("cell_exprs") or {}).get(f"{P}|{C}")
+                                or (ln.get("plant_exprs") or {}).get(P) or ln.get("expr") or "0")
+                        out = node_at(ex.parse(text), P, C, False)
+                else:
+                    for p in (self.plants if P == ALL else [P]):
+                        for c in (self.codes if C == TOTAL else [C]):
+                            add(out, line_at(name, p, c))
+            memo[key] = out
+            return out
+
+        def line_agg(name: str, P: str) -> dict:
+            """Report semantics of a plant total (P = plant) or company total (P = __ALL__)."""
+            key = (name, P, "agg")
+            if key in memo:
+                return memo[key]
+            memo[key] = {}
+            ln = self.lines.get(name)
+            out: dict = {}
+            if ln is not None:
+                te = ln.get("total_exprs") or {}
+                if P != ALL:
+                    if P in te:
+                        out = node_at(ex.parse(te[P]), P, TOTAL, True)
+                    elif self.is_additive(name):
+                        out = line_at(name, P, TOTAL)
+                    else:
+                        out = node_at(ex.parse((ln.get("plant_exprs") or {}).get(P) or ln.get("expr") or "0"),
+                                      P, TOTAL, True)
+                elif not self.is_additive(name):
+                    out = node_at(ex.parse(ln.get("expr") or "0"), ALL, TOTAL, True)
+                elif te:
+                    for p in self.plants:
+                        add(out, line_agg(name, p))
+                else:
+                    out = line_at(name, ALL, TOTAL)
+            memo[key] = out
+            return out
+
+        coefs = line_agg(code, plant) if pg is None else line_at(code, plant, pg)
+        own_cells = {(plant, c) for c in (self.codes if pg is None else [pg])}
+        merged: dict[tuple, dict] = {}
+        for (kind, body, P, C), c in coefs.items():
+            if c == 0:
+                continue
+            if kind == "const":
+                v = c
+            elif kind == "X":
+                v = c * fixed[(kind, body, P, C)]
+            else:
+                v = c * self._pick(self._leaf_grid(kind, body), f"{P}|{C}")
+            natural = (P, C) in own_cells or (pg is None and P == plant and C == TOTAL)
+            loc = (plant, pg or TOTAL) if natural else (P, C)
+            if kind == "const":
+                body = ""
+            m = merged.setdefault((kind, body) + loc, {"kind": kind, "body": body, "plant": loc[0], "code": loc[1],
+                                                        "value": 0.0, "coefficient": c, "own": natural})
+            m["value"] += v
+        out = []
+        for m in merged.values():
+            if abs(m["value"]) < 1e-15:
+                continue
+            kind, body = m["kind"], m["body"]
+            if kind == "C":
+                cat, _, comp = body.partition("|")
+                label = f"{cat} – {dict(direct='direct', common='Common allocation', corporate='Corporate allocation')[comp]}"
+            elif kind == "P":
+                bits = body.split("|")
+                label = {"direct": lambda: f"PRE direct – {bits[1]}",
+                         "item": lambda: f"PRE {bits[1]} – allocated from {bits[2]}",
+                         "pool": lambda: f"PRE pool {bits[1]} (memo)"}.get(bits[0], lambda: f"PRE {body}")()
+            elif kind == "MCADJ":
+                label = "Material-cost adjustment"
+            elif kind == "D":
+                label = f"Driver {body}"
+            elif kind == "const":
+                label = "Constant"
+            else:
+                label = f"Non-linear term {body}"
+            if not m["own"]:
+                where = "company" if m["plant"] == ALL else m["plant"]
+                what = "total" if m["code"] == TOTAL else m["code"]
+                label += f" (taken from {where} · {what})"
+            m["label"] = label
+            out.append(m)
+        return sorted(out, key=lambda r: -abs(r["value"]))
+
+    def _agg_ref(self, ref: ex.Ref, plant: str | None):
+        body, _, at = ref.body.partition("@")
+        if at:
+            return self._resolve(ref)
+        if ref.kind == "L":
+            return self.aggregate_value(body, plant, None)
+        grid = self._resolve(ref)
+        rows = slice(None) if plant is None else self.pidx[plant]
+        return float(np.sum(grid[rows, :])) if isinstance(grid, np.ndarray) else float(grid)
 
     def controls(self, ba_raw: pd.DataFrame, ba_adj: pd.DataFrame, cc_adj: pd.DataFrame,
                  np_facts: pd.DataFrame, pre_facts: pd.DataFrame) -> list[Control]:
@@ -910,32 +1120,8 @@ class EngineResult:
 
     # drill-down -----------------------------------------------------------
     def explain(self, line: str, plant: str, code: str) -> list[dict]:
-        """Break a P&L cell into base components (category x component, PRE items, MC adjustment)."""
-        e = self.engine
-        coef = e._linear_coefficients(line)
-        i, j = e.pidx[plant], e.kidx[code] if code != "__TOTAL__" else None
-        out = []
-        for key, c in coef.items():
-            if key[0] in ("const", "nonlinear") or c == 0:
-                continue
-            if key[0] == "C":
-                g = e.component(key[1], key[2])
-                label = f"{key[1]} – {key[2]}"
-            elif key[0] == "P":
-                g = e._pre_ref(key[1])
-                label = f"PRE {key[1]}"
-            elif key[0] == "MCADJ":
-                g = e.mc_adjustment_grid()
-                label = "Material-cost adjustment"
-            elif key[0] == "D":
-                g = e._spec_grid({"kind": "driver", "driver": key[1]})
-                label = f"Driver {key[1]}"
-            else:
-                continue
-            v = float(g[i, :].sum() if j is None else g[i, j]) * c
-            if abs(v) > 0:
-                out.append({"ref": key, "label": label, "coefficient": c, "value": v})
-        return sorted(out, key=lambda r: -abs(r["value"]))
+        """Break a reported value (cell, or plant total with code "__TOTAL__") into components."""
+        return self.engine.explain_cell(line, plant, None if code == "__TOTAL__" else code)
 
     def source_rows(self, category: str, component: str, plant: str, code: str) -> pd.DataFrame:
         """GL x BA rows behind a component cell.  Allocated components are shown as the

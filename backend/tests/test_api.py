@@ -148,9 +148,16 @@ def test_drilldown_reconciles(client, H, company_id):
     assert d["explained"] == pytest.approx(d["value"], rel=1e-9, abs=1e-9)
     power = client.get(f"/api/runs/{rid}/drilldown", params={"line": "foh_power_and_fuel", "plant": "NTH",
                                                              "code": "GATE"}, headers=H["viewer"]).json()
-    parts = {p["label"]: p for p in power["parts"]}
-    common = next(p for k, p in parts.items() if "common" in k)
+    common = next(p for p in power["parts"] if p.get("component") == "common")
     assert common["sources"] and sum(s["value"] for s in common["sources"]) == pytest.approx(common["value"])
+    # plant total and PRE parts reconcile too, and every part's source rows add up to the part
+    tot = client.get(f"/api/runs/{rid}/drilldown", params={"line": "pbt", "plant": "NTH"}, headers=H["viewer"]).json()
+    assert tot["explained"] == pytest.approx(tot["value"], rel=1e-9, abs=1e-9)
+    pre = [p for p in tot["parts"] if p["kind"] == "P" and p["sources"]]
+    assert pre, "expected PRE parts with cost-centre rows"
+    for part in tot["parts"]:
+        if part["sources"] and part["kind"] in ("C", "P") and len(part["sources"]) < 200:
+            assert sum(s["value"] for s in part["sources"]) == pytest.approx(part["value"], rel=1e-6, abs=1e-9)
 
 
 def test_compare_and_mc_comparison(client, H, company_id):

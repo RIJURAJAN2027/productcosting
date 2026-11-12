@@ -332,6 +332,12 @@ def dashboard(db: Session, company: Company, period_id: int | None, unit: str | 
 # ----------------------------------------------------------------------- drill-down
 def drilldown(db: Session, run: CalcRun, line: str, plant: str, code: str, unit: str | None = None,
               limit: int = 200) -> dict:
+    """Explain one reported value: its components (category parts, PRE items, MC adjustments)
+    and, for each, the GL x business-area / cost-centre rows behind it.  Allocated parts show
+    the pool's rows scaled by the share that reached this cell; every part's rows add up to
+    the part, and the parts add up to the reported value."""
+    import pandas as pd
+
     company, period, cfg = run_context(db, run)
     div, unit_name = unit_divisor(company, unit)
     result = load_result(db, run)
@@ -340,52 +346,72 @@ def drilldown(db: Session, run: CalcRun, line: str, plant: str, code: str, unit:
         raise HTTPException(404, f"Unknown line {line}")
     if plant not in e.pidx:
         raise HTTPException(400, "Drill-down needs a plant (cell or plant total)")
-    cdiv = e.div / div
+    if code != TOTAL and code not in e.kidx:
+        raise HTTPException(400, f"Unknown product group {code}")
+    cdiv = e.div / div                      # engine unit -> display unit
+    gl_desc = {g: (info or {}).get("description") for g, info in e.cfg.gl_accounts.items()}
+
+    def cells(p: str, c: str) -> list[tuple[str, str]]:
+        return [(pp, cc) for pp in (e.plants if p == ALL else [p]) for cc in (e.codes if c == TOTAL else [c])]
+
+    def scaled(rows: pd.DataFrame, dim: str, value_col: str, target: float) -> list[dict]:
+        if rows is None or not len(rows):
+            return []
+        agg = rows.groupby(["gl", dim], as_index=False)[value_col].sum()
+        total = float(agg[value_col].sum())
+        ratio = target / total if abs(total) > 1e-15 else 0.0
+        agg = agg.reindex(agg[value_col].abs().sort_values(ascending=False).index).head(limit)
+        return [{"gl": r.gl, "gl_desc": gl_desc.get(r.gl), "dimension": getattr(r, dim),
+                 "value": float(getattr(r, value_col)) * ratio * cdiv, "share": ratio}
+                for r in agg.itertuples()]
+
+    pre_ok = result.pre_facts[result.pre_facts["status"] == "ok"]
     parts = []
     for part in result.explain(line, plant, code):
-        key = part["ref"]
+        kind, body, p, c = part["kind"], part["body"], part["plant"], part["code"]
         item: dict[str, Any] = {"label": part["label"], "value": part["value"] * cdiv,
-                                "coefficient": part["coefficient"], "sources": []}
-        if key[0] == "C":
-            cat, comp = key[1], key[2]
-            codes = [code] if code != TOTAL else e.codes
-            frames = [result.source_rows(cat, comp, plant, c) for c in codes]
-            import pandas as pd
-            rows = pd.concat(frames) if frames else None
-            if rows is not None and len(rows):
-                agg = rows.groupby(["gl", "ba"], as_index=False).agg(value=("value", "sum"), share=("share", "max"))
-                agg = agg.reindex(agg["value"].abs().sort_values(ascending=False).index).head(limit)
-                gl_desc = {g: (e.cfg.gl_accounts.get(g) or {}).get("description") for g in agg["gl"]}
-                item["sources"] = [{"gl": r.gl, "gl_desc": gl_desc.get(r.gl), "dimension": r.ba,
-                                    "value": float(r.value) * part["coefficient"] * cdiv,
-                                    "share": float(r.share)} for r in agg.itertuples()]
+                                "coefficient": part["coefficient"], "kind": kind, "plant": p, "code": c,
+                                "sources": []}
+        if kind == "C":
+            cat, _, comp = body.partition("|")
+            frames = [result.source_rows(cat, comp, pp, cc) for pp, cc in cells(p, c)]
+            frames = [f for f in frames if len(f)]
             item.update({"category": cat, "component": comp,
                          "pool": {"direct": None, "common": cfg.com_code, "corporate": cfg.cor_code}[comp]})
-        elif key[0] == "P":
-            body = key[1].split("@")[0]
-            parts_ = body.split("|")
-            f = result.pre_facts[result.pre_facts["status"] == "ok"]
-            if parts_[0] == "direct":
-                rows = f[(f["plant"] == plant) & (f["function"].isin([code] if code != TOTAL else e.pgs))]
-                if len(parts_) > 1:
-                    rows = rows[rows["category"] == parts_[1]]
-                share = 1.0
+            if frames:
+                rows = pd.concat(frames)
+                item["sources"] = scaled(rows, "ba", "value", part["value"])
+                if comp == "direct":
+                    for s_ in item["sources"]:
+                        s_["share"] = 1.0
+        elif kind == "P":
+            bits = body.split("|")
+            plants_ = e.plants if p == ALL else [p]
+            if bits[0] == "direct":
+                codes_ = e.codes if c == TOTAL else [c]
+                rows = pre_ok[(pre_ok["category"] == bits[1]) & pre_ok["plant"].isin(plants_)
+                              & pre_ok["function"].isin(codes_)]
             else:
-                fn = parts_[-1] if parts_[0] in ("fn", "item") else None
-                rows = f[f["function"] == fn] if fn else f.iloc[0:0]
-                if parts_[0] == "item":
-                    rows = rows[rows["category"] == parts_[1]]
-                pool = float(rows["amount"].sum()) / e.div
-                share = (part["value"] / part["coefficient"]) / pool if pool else 0.0
-            agg = rows.groupby(["gl", "cc"], as_index=False)["amount"].sum()
-            agg = agg.reindex(agg["amount"].abs().sort_values(ascending=False).index).head(limit)
-            item["sources"] = [{"gl": r.gl, "dimension": r.cc,
-                                "value": float(r.amount) / e.div * share * part["coefficient"] * cdiv,
-                                "share": share} for r in agg.itertuples()]
-        elif key[0] == "MCADJ":
-            item["sources"] = [{"gl": None, "dimension": f"{m.plant_code}|{m.pg_code}", "value": m.value,
-                                "note": m.reason} for m in db.scalars(select(McAdjustment).where(
-                                    McAdjustment.period_id == period.id)).all()]
+                fn = bits[-1]
+                rows = pre_ok[pre_ok["function"] == fn]
+                if bits[0] == "item":
+                    rows = rows[rows["category"] == bits[1]]
+                mode = (e.functions.get(fn) or {}).get("mode", "plant")
+                if mode == "plant" or bits[0] == "pool":
+                    rows = rows[rows["plant"].isin(plants_)]
+            item["sources"] = scaled(rows, "cc", "amount", part["value"])
+            if bits[0] == "direct":
+                for s_ in item["sources"]:
+                    s_["share"] = 1.0
+        elif kind == "MCADJ":
+            in_loc = set(cells(p, c))
+            for m in db.scalars(select(McAdjustment).where(McAdjustment.period_id == period.id)).all():
+                if (m.plant_code, m.pg_code) in in_loc:
+                    item["sources"].append({
+                        "gl": None, "dimension": f"{m.plant_code}|{m.pg_code}",
+                        "value": m.value / div if m.kind == "amount" else None,
+                        "note": (m.reason or "") + (f" (target MC {m.value * 100:.2f}% of sales)"
+                                                    if m.kind == "mc_pct" else "")})
         parts.append(item)
     total = result.value(line, plant, None if code == TOTAL else code) * cdiv
     return {"line": line, "label": e.lines[line]["label"], "plant": plant, "code": code, "unit": unit_name,
