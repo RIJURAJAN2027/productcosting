@@ -1,0 +1,17 @@
+# HTTPS in front of the application (docker compose profile "https").
+# Caddy obtains and renews a free Let's Encrypt certificate for $DOMAIN automatically; the domain's
+# DNS A record must point to this server and ports 80 and 443 must be open.
+{$DOMAIN} {
+	encode zstd gzip
+	request_body {
+		max_size 60MB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	reverse_proxy app:8000
+}

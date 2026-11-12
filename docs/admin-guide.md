@@ -9,6 +9,49 @@ Requirements: a Linux server or VM with Docker Engine 24+ and the Compose plugin
 20 GB disk (more for many years of runs). Any cloud VM works the same way; the database can also be
 a managed PostgreSQL 14+ (see *External database*).
 
+### Quickest: the install script (Hostinger VPS or any Ubuntu server)
+
+`scripts/install-server.sh` asks three questions, writes `.env` with generated passwords and secrets,
+starts PostgreSQL and the application and – with a domain – an HTTPS proxy (Caddy) that obtains and
+renews a free Let's Encrypt certificate. It can also schedule a daily database backup.
+
+**On Hostinger** (*VPS* plans – the *Web*, *Cloud* and *WordPress* hosting plans run PHP / Node.js
+sites with MySQL and cannot run this application):
+
+1. **Buy / open the VPS** in hPanel: *KVM 2* (2 vCPU, 8 GB RAM) is comfortable, *KVM 1* (1 vCPU,
+   4 GB) is enough for a few users. Choose the data-centre location closest to your users.
+2. **Operating system**: on the VPS dashboard open *OS & Panel → Operating System* and pick the
+   **Docker** application template (Ubuntu with Docker installed), or plain *Ubuntu 24.04 LTS* – the
+   script installs Docker if it is missing. Changing the operating system erases the server, so do it
+   before installing anything. Set a strong root password or add your SSH key.
+3. **Domain**: under *Domains*, select your domain, open *DNS / Nameservers* and add an **A record**,
+   e.g. name `costing`, pointing to the VPS's IP address (shown on the VPS overview). Wait until
+   `costing.yourdomain.com` resolves to that IP (`dig A +short costing.yourdomain.com`; usually minutes,
+   at most a day).
+4. **Firewall**: if you use the VPS firewall (*Security → Firewall*), add inbound rules for TCP 22,
+   80 and 443 (and UDP 443).
+5. **Install**: connect with SSH – `ssh root@<VPS IP>` (the SSH details are on the VPS overview) – and
+   run:
+
+   ```bash
+   git clone https://github.com/RIJURAJAN2027/productcosting.git /opt/productcosting
+   cd /opt/productcosting
+   scripts/install-server.sh
+   ```
+
+   Answer the questions (domain `costing.yourdomain.com`, administrator e-mail, organisation name).
+   The first build takes a few minutes. The script prints the address and the generated administrator
+   password – sign in and change it under *Profile*.
+
+6. **Upgrade** later with `cd /opt/productcosting && git pull && scripts/install-server.sh` (the
+   existing `.env` and data are kept). Hostinger's VPS snapshots and weekly backups are a useful extra
+   layer on top of the daily database backup (section 6).
+
+Without a domain the script serves plain http on port 8080 – fine for a trial, but use a domain and
+HTTPS before entering real figures or passwords.
+
+### Manual set-up
+
 ```bash
 git clone https://github.com/RIJURAJAN2027/productcosting.git
 cd productcosting
@@ -34,18 +77,22 @@ Open `http://<server>:8080`, sign in as the bootstrap administrator and change t
 (*Profile*). The server refuses to start in production with the default secret key or the default
 admin password.
 
-**Behind a TLS-inspecting corporate proxy**, give the build the proxy's CA certificate (it is used
-only to download packages and is not stored in the image):
-
-```bash
-docker build --secret id=ca,src=/path/to/corporate-ca.pem -t productcosting:latest .
-docker compose up -d
-```
+**Behind a TLS-inspecting corporate proxy**, give the build the proxy's CA certificate: paste it
+into `docker/extra-ca.pem` (or run `BUILD_CA_FILE=/path/to/ca.pem scripts/install-server.sh`). It is
+used only to download packages and is not stored in the image. With plain Docker:
+`docker build --secret id=ca,src=/path/to/corporate-ca.pem -t productcosting:latest .`
 
 ### HTTPS
 
-Put the application behind your reverse proxy or load balancer (nginx, IIS ARR, Traefik, an Azure /
-AWS / GCP load balancer) that terminates TLS and forwards to port 8080. Example nginx server block:
+**Built in:** set `DOMAIN=costing.example.com`, `COMPOSE_PROFILES=https` and `APP_BIND=127.0.0.1` in
+`.env` and run `docker compose up -d`. The `caddy` service (see `docker/Caddyfile`) listens on ports 80
+and 443, obtains and renews a Let's Encrypt certificate for the domain, redirects http to https, adds
+security headers and forwards to the application, whose own port is then reachable only from the
+server itself. The domain's DNS must point to the server and ports 80 and 443 must be open.
+
+**Your own proxy:** put the application behind your reverse proxy or load balancer (nginx, IIS ARR,
+Traefik, an Azure / AWS / GCP load balancer) that terminates TLS and forwards to port 8080. Example
+nginx server block:
 
 ```nginx
 server {
@@ -250,12 +297,13 @@ import) – the workbook is no longer needed.
 **Database (recommended, everything):**
 
 ```bash
-scripts/backup-db.sh                      # writes backups/costing_YYYYmmdd_HHMM.dump
+scripts/backup-db.sh                      # writes backups/costing_YYYYmmdd_HHMM.dump, keeps 30 days
 scripts/restore-db.sh backups/costing_20261112_0200.dump
 ```
 
-Schedule the backup daily (cron / Task Scheduler) and copy the files off the server. The scripts
-use `pg_dump` / `pg_restore` inside the `db` container.
+Schedule the backup daily (the install script offers to add the cron job; `KEEP_DAYS` changes the
+retention) and copy the files off the server. The scripts use `pg_dump` / `pg_restore` inside the
+`db` container.
 
 **One company (from the application):** *Administration → Backup & restore* downloads a compressed
 file with the company's settings, masters, periods, uploads, adjustments, MIS figures and runs, and

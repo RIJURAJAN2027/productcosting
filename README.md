@@ -51,6 +51,17 @@ company*, select it, then *Administration → Import legacy workbook*. The impor
 every value of the workbook and then corrects known workbook errors (plugs, GLs that never reach the
 P&L), listing each correction and its effect. See the [admin guide](docs/admin-guide.md).
 
+## Deploy on a server (e.g. Hostinger VPS)
+
+```bash
+git clone https://github.com/RIJURAJAN2027/productcosting.git /opt/productcosting
+cd /opt/productcosting && scripts/install-server.sh
+```
+
+The script generates the secrets, starts PostgreSQL and the application with Docker, sets up HTTPS
+with a free Let's Encrypt certificate for your domain and can schedule daily backups. Step-by-step
+for Hostinger: [admin guide](docs/admin-guide.md#quickest-the-install-script-hostinger-vps-or-any-ubuntu-server).
+
 ## Deploy on Vercel
 
 The repository includes a `vercel.json` (web interface and API as two Vercel Services). Import the

@@ -4,13 +4,14 @@
 # Behind a TLS-inspecting corporate proxy, pass its CA certificate as a build secret (it is used
 # only while downloading packages and is not stored in the image):
 #   docker build --secret id=ca,src=/path/to/corporate-ca.pem -t productcosting .
+# With docker compose, paste it into docker/extra-ca.pem instead.
 
 # ---------------------------------------------------------------- UI build
 FROM node:22-alpine AS ui
 WORKDIR /ui
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=secret,id=ca,required=false \
-    if [ -s /run/secrets/ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/ca; fi; \
+    if grep -q "BEGIN CERTIFICATE" /run/secrets/ca 2>/dev/null; then export NODE_EXTRA_CA_CERTS=/run/secrets/ca; fi; \
     npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
@@ -27,8 +28,10 @@ WORKDIR /app
 RUN groupadd --system --gid 10001 costing && useradd --system --uid 10001 --gid costing --home /app costing
 COPY backend/requirements.txt ./
 RUN --mount=type=secret,id=ca,required=false \
-    if [ -s /run/secrets/ca ]; then export PIP_CERT=/run/secrets/ca; fi; \
-    pip install -r requirements.txt
+    if grep -q "BEGIN CERTIFICATE" /run/secrets/ca 2>/dev/null; then \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/ca > /tmp/build-ca.pem && export PIP_CERT=/tmp/build-ca.pem; \
+    fi; \
+    pip install -r requirements.txt && rm -f /tmp/build-ca.pem
 COPY backend/app ./app
 COPY backend/alembic ./alembic
 COPY backend/alembic.ini ./

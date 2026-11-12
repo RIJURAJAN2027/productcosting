@@ -60,7 +60,7 @@ def create_app() -> FastAPI:
 
     dist = Path(s.frontend_dist) if s.frontend_dist else None
     if dist and dist.exists():
-        @app.get("/{path:path}", include_in_schema=False)
+        @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
         def spa(path: str):
             target = dist / path
             if path and target.is_file() and dist in target.resolve().parents:

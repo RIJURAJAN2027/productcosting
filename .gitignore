@@ -44,3 +44,6 @@ frontend/dist/
 *.db
 *.sqlite
 *.sqlite3
+
+# --- Build-time CA copied by scripts/install-server.sh ----------------------
+docker/.build-ca.local.pem

@@ -1,7 +1,9 @@
-# Product Costing & Profitability – application + PostgreSQL.
+# Product Costing & Profitability – application + PostgreSQL (+ optional HTTPS proxy).
 #   cp .env.example .env      # then set the passwords and secret in .env
 #   docker compose up -d --build
 #   open http://localhost:8080
+# On a server with a domain, scripts/install-server.sh writes .env (secrets, DOMAIN,
+# COMPOSE_PROFILES=https) and starts everything, including automatic HTTPS.
 services:
   db:
     image: postgres:16-alpine
@@ -19,7 +21,9 @@ services:
       retries: 30
 
   app:
-    build: .
+    build:
+      context: .
+      secrets: [ca]          # optional CA certificate for TLS-inspecting proxies, see docker/extra-ca.pem
     image: productcosting:${APP_VERSION:-latest}
     restart: unless-stopped
     depends_on:
@@ -42,7 +46,31 @@ services:
       PC_OIDC_REDIRECT_URI: ${PC_OIDC_REDIRECT_URI:-}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
     ports:
-      - "${APP_PORT:-8080}:8000"
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8080}:8000"
+
+  # HTTPS with a free, automatically renewed Let's Encrypt certificate for DOMAIN
+  # (enable with COMPOSE_PROFILES=https in .env, or: docker compose --profile https up -d)
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+secrets:
+  ca:
+    file: ${BUILD_CA_FILE:-./docker/extra-ca.pem}   # must be inside this folder
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:
