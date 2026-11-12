@@ -13,11 +13,16 @@ confirm. Company-specific figures and codes are deliberately not recorded here.
   amounts) are kept, but made visible: typed bases become basis values on the rule, plugs appear in
   the *manual allocation plugs* control, and edits to the trial balance become **adjustment rules
   with a reason**.
-* Workbook defects are reproduced, not silently fixed, and each one is reported by a control – for
-  example GL categories that no P&L line uses (amounts that disappear from the P&L), allocation legs
-  whose basis leaves part of a pool unallocated, and the difference between the P&L's PBT and the
-  profit per trial balance. Fixing them is a configuration change (map the category, remove the plug,
-  correct the basis) that the business signs off as a new baseline.
+* The import is first proven against the workbook as it is. Workbook defects are reported by
+  controls – GL categories that no P&L line uses (amounts that disappear from the P&L), allocation
+  plugs, pools left unallocated, and the difference between the P&L's PBT and the profit per trial
+  balance.
+* **Confirmed by the business: plugs and dropped categories are errors.** The import therefore
+  corrects them by default: plugs in allocation formulas and report figures are removed, and GLs whose
+  category never reaches the P&L are mapped to the category of the other GLs with the same FS
+  description. Each correction and its effect on profit is listed for sign-off of the new baseline.
+* Still open: a common pool whose category has no allocation rule at all stays unallocated (reported
+  by the *allocations* control) until a rule is added – that needs a decision on the basis.
 
 ## Assumptions
 
@@ -66,8 +71,9 @@ confirm. Company-specific figures and codes are deliberately not recorded here.
    all?
 8. **Negative bases** (e.g. net negative sales after returns and liquidated damages) – should such a
    product group still receive a share?
-9. **Workbook defects** – are the balancing plugs, unmapped categories and edited cells deliberate
-   management adjustments (keep as rules with reasons) or errors (fix and sign off a new baseline)?
+9. **Workbook defects** – plugs and unmapped categories: *answered – errors, corrected on import*.
+   Edited cells in the trial-balance sheets are kept as adjustment rules with reasons; confirm whether
+   any of them are errors too. Pools without an allocation rule: which basis should they use?
 10. **Standing exclusions** – are excluded amounts (e.g. foreign-exchange items) a standing policy or a
     one-off for one period?
 11. **Material cost** – confirm the worked-out MC rule (TB MC + adjustment, or target MC % × net

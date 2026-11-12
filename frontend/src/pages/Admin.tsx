@@ -308,13 +308,30 @@ function Backup() {
   );
 }
 
+interface Correction { kind: string; where: string; source?: string | null; amount: number; detail: string }
 interface LegacyResult {
   counts: Record<string, number>;
   notes: { level: string; message: string; sheet?: string; cell?: string }[];
   note_counts: Record<string, number>;
   period_id: number | null;
   regression: null | { tolerance_rupees: number; cells_compared: number; mismatches: number; by_section: { section: string; cells: number; mismatches: number; max_abs_diff: number }[]; worst: Record<string, unknown>[] };
+  corrections: null | {
+    changes: Correction[];
+    effect: null | {
+      unit: string; values_changed: number; lines_changed: string[];
+      pbt: { plant: string; before: number; after: number; change: number }[];
+      controls: { code: string; title: string; before: number; after: number; after_level: string }[];
+      changed_values: { label: string; plant: string; pg: string; before: number; after: number; change: number }[];
+    };
+  };
 }
+
+const CORRECTION_LABEL: Record<string, string> = {
+  allocation_plug_removed: "Plug removed from allocation",
+  report_plug_removed: "Plug removed from report",
+  gl_remapped: "GL brought into the P&L",
+  gl_not_mapped: "GL still outside the P&L",
+};
 
 function LegacyImport() {
   const { company, setCompanyId, companyId } = useApp();
@@ -322,13 +339,16 @@ function LegacyImport() {
   const toast = useToast();
   const qc = useQueryClient();
   const [f, setF] = useState({ period_code: "", period_label: "", start_date: "", end_date: "" });
+  const [fixPlugs, setFixPlugs] = useState(true);
+  const [fixGls, setFixGls] = useState(true);
   const [busy, setBusy] = useState(false);
   const [res, setRes] = useState<LegacyResult | null>(null);
   const run = async (file: File) => {
     setBusy(true);
     setRes(null);
     try {
-      const r = await api.upload<LegacyResult>(`/api/companies/${companyId}/legacy-import`, { file, ...f });
+      const r = await api.upload<LegacyResult>(`/api/companies/${companyId}/legacy-import`,
+        { file, ...f, remove_plugs: String(fixPlugs), map_unused_categories: String(fixGls) });
       setRes(r);
       toast("Workbook imported");
       qc.invalidateQueries();
@@ -350,14 +370,22 @@ function LegacyImport() {
         <Field label="From"><input type="date" value={f.start_date} onChange={(e) => setF({ ...f, start_date: e.target.value })} /></Field>
         <Field label="To"><input type="date" value={f.end_date} onChange={(e) => setF({ ...f, end_date: e.target.value })} /></Field>
       </div>
-      <FileDrop accept=".xlsx,.xlsm" label={busy ? "Importing…" : "Drop the legacy workbook (.xlsx) here or click to choose"} busy={busy} onFile={run} />
+      <div className="stack small">
+        <strong>Correct known workbook errors</strong>
+        <label className="row"><input type="checkbox" checked={fixPlugs} onChange={(e) => setFixPlugs(e.target.checked)} />
+          Remove fixed amounts typed into allocation formulas and report figures (plugs), so every pool is shared by its basis and reports show calculated values</label>
+        <label className="row"><input type="checkbox" checked={fixGls} onChange={(e) => setFixGls(e.target.checked)} />
+          Bring GLs whose category never reaches the P&L into it, using the category that other GLs with the same FS description use</label>
+        <span className="muted">The import is always checked against the workbook first, without corrections; every correction is then listed below with its effect.</span>
+      </div>
+      <FileDrop accept=".xlsx,.xlsm" label={busy ? "Importing… (about half a minute)" : "Drop the legacy workbook (.xlsx) here or click to choose"} busy={busy} onFile={run} />
       {res ? (
         <div className="stack">
           <div className="row small">{Object.entries(res.counts).map(([k, v]) => <span key={k}>{k.replace(/_/g, " ")}: <strong>{v}</strong> ·</span>)}</div>
           {res.regression ? (
             <div className="card stack">
               <div className="row">
-                <h3 style={{ margin: 0 }}>Regression against the workbook</h3>
+                <h3 style={{ margin: 0 }}>Import check against the workbook (before corrections)</h3>
                 {res.regression.mismatches === 0 ? <Badge status="ok">all {res.regression.cells_compared.toLocaleString()} cells match within ₹{res.regression.tolerance_rupees}</Badge>
                   : <Badge status="error">{res.regression.mismatches} of {res.regression.cells_compared} cells differ</Badge>}
               </div>
@@ -367,6 +395,55 @@ function LegacyImport() {
                   <tr key={s.section}><td>{s.section}</td><td className="num">{s.cells}</td><td className="num">{s.mismatches}</td><td className="num">{fmt(s.max_abs_diff, 8)}</td></tr>
                 ))}</tbody>
               </table>
+            </div>
+          ) : null}
+          {res.corrections && res.corrections.changes.length ? (
+            <div className="card stack">
+              <h3 style={{ margin: 0 }}>Corrections ({res.corrections.changes.length})</h3>
+              <div className="table-wrap">
+                <table className="data">
+                  <thead><tr><th>Correction</th><th>Where</th><th>Workbook cell</th><th className="num">Amount ({res.corrections.effect?.unit ?? "calc. unit"})</th></tr></thead>
+                  <tbody>{res.corrections.changes.map((c, i) => (
+                    <tr key={i} title={c.detail}>
+                      <td><Badge status={c.kind === "gl_not_mapped" ? "warning" : "ok"}>{CORRECTION_LABEL[c.kind] ?? c.kind}</Badge></td>
+                      <td className="small">{c.where}<div className="muted">{c.detail}</div></td>
+                      <td className="mono small">{c.source ?? ""}</td>
+                      <td className="num">{fmt(c.amount, 6)}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+              {res.corrections.effect ? (
+                <>
+                  <h3 style={{ margin: "8px 0 0" }}>Effect on profit before tax ({res.corrections.effect.unit})</h3>
+                  <table className="data">
+                    <thead><tr><th>Plant</th><th className="num">Workbook</th><th className="num">Corrected</th><th className="num">Change</th></tr></thead>
+                    <tbody>{res.corrections.effect.pbt.map((r) => (
+                      <tr key={r.plant} style={r.plant === "__ALL__" ? { fontWeight: 650 } : undefined}>
+                        <td>{r.plant === "__ALL__" ? "Company" : r.plant}</td>
+                        <td className="num">{fmt(r.before, 6)}</td><td className="num">{fmt(r.after, 6)}</td><td className="num">{fmt(r.change, 6)}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                  <div className="row small">
+                    {res.corrections.effect.controls.map((c) => (
+                      <span key={c.code}><Badge status={c.after_level}>{c.after_level}</Badge> {c.title}: {fmt(c.before, 6)} → {fmt(c.after, 6)}</span>
+                    ))}
+                  </div>
+                  <details>
+                    <summary className="clickable">{res.corrections.effect.values_changed} report values changed in {res.corrections.effect.lines_changed.length} lines</summary>
+                    <div className="table-wrap" style={{ maxHeight: 360 }}>
+                      <table className="data">
+                        <thead><tr><th>Line</th><th>Plant</th><th>Product group</th><th className="num">Workbook</th><th className="num">Corrected</th><th className="num">Change</th></tr></thead>
+                        <tbody>{res.corrections.effect.changed_values.slice(0, 1000).map((r, i) => (
+                          <tr key={i}><td>{r.label}</td><td>{r.plant}</td><td>{r.pg === "__TOTAL__" ? "Plant total" : r.pg}</td>
+                            <td className="num">{fmt(r.before, 6)}</td><td className="num">{fmt(r.after, 6)}</td><td className="num">{fmt(r.change, 6)}</td></tr>
+                        ))}</tbody>
+                      </table>
+                    </div>
+                  </details>
+                </>
+              ) : null}
             </div>
           ) : null}
           <details>

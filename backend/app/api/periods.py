@@ -20,6 +20,7 @@ from ..engine import expr as ex
 from ..models import (AdjustmentRule, Company, DriverValue, McAdjustment, MisLine, Period, TBLine, Upload, User,
                       now)
 from ..services import uploads as up_svc
+from ..importers.corrections import CorrectionOptions
 from ..services.legacy_import import import_legacy
 from ..settings import get_settings
 
@@ -212,15 +213,23 @@ def upload_download(upload_id: int, company: Company = Depends(get_company), db:
 @router.post("/legacy-import")
 async def legacy_import(file: UploadFile = File(...), period_code: str | None = Form(None),
                         period_label: str | None = Form(None), end_date: dt.date | None = Form(None),
-                        start_date: dt.date | None = Form(None), company: Company = Depends(get_company),
+                        start_date: dt.date | None = Form(None), remove_plugs: bool = Form(True),
+                        map_unused_categories: bool = Form(True), company: Company = Depends(get_company),
                         user: User = Depends(require("admin")), db: Session = Depends(get_db)):
     """Create this company's masters, rules, P&L structure and report layouts from a legacy workbook.
-    With a period code the workbook's TBs, adjustments, MC adjustments and MIS figures are loaded too and
-    the result is compared with the workbook (regression)."""
+
+    The imported configuration is first compared with every value of the workbook (``regression``).
+    Then, unless switched off, known workbook errors are corrected and listed with their effect
+    (``corrections``): fixed amounts typed into allocation formulas and report figures are removed,
+    and GLs whose category never reaches the P&L are mapped to the category suggested by their FS
+    description. With a period code the workbook's TBs, adjustments, MC adjustments and MIS figures
+    are loaded as that period's inputs."""
     data = await _read(file)
     try:
         return import_legacy(db, company, data, file.filename or "workbook.xlsx", user, period_code, period_label,
-                             end_date, start_date)
+                             end_date, start_date,
+                             corrections=CorrectionOptions(remove_plugs=remove_plugs,
+                                                           map_unused_categories=map_unused_categories))
     except ValueError as e:
         raise HTTPException(422, str(e))
 

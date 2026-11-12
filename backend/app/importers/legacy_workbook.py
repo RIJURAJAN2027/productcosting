@@ -142,6 +142,7 @@ class LegacyWorkbookImporter:
             self.wf = openpyxl.load_workbook(source)
             self.wv = openpyxl.load_workbook(source, data_only=True)
         self.notes: list[dict] = []
+        self.report_plugs: list[dict] = []   # fixed amounts typed into report cells (see corrections.py)
         self.sheet = self._resolve_sheets()
         self.lines: "OrderedDict[str, dict]" = OrderedDict()
         self.dfr_line_of: dict[int, str] = {}
@@ -694,7 +695,10 @@ class LegacyWorkbookImporter:
             if plug:
                 self.note("warning", f"{sh}!{letter(c)}{r}: hard-coded amount {plug:+g} added to the looked-up value; "
                                      "kept in the line formula.")
-                out = f"({out} + {plug!r})"
+                plugged = f"({out} + {plug!r})"
+                self.report_plugs.append({"cell": f"{sh}!{letter(c)}{r}", "expr": plugged, "base": out,
+                                          "amount": plug})
+                out = plugged
             return out
 
         def ref(sh2: str, cc: int, rr: int) -> str | None:
@@ -1369,7 +1373,8 @@ class LegacyWorkbookImporter:
                      "cost_centres": masters["cost_centres"], "gl_accounts": gls},
             trace={"dfr_line_of": self.dfr_line_of, "rep_line_of": {f"{k[0]}!{k[1]}": v
                                                                       for k, v in self.rep_line_of.items()},
-                   "sheets": self.sheet, "row_desc": {str(k): list(v) for k, v in self.row_desc.items()}},
+                   "sheets": self.sheet, "row_desc": {str(k): list(v) for k, v in self.row_desc.items()},
+                   "report_plugs": self.report_plugs},
         )
 
 
