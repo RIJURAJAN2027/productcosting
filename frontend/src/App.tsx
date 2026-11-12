@@ -12,6 +12,7 @@ import Adjustments from "./pages/Adjustments";
 import Audit from "./pages/Audit";
 import Admin from "./pages/Admin";
 import Profile from "./pages/Profile";
+import Welcome from "./pages/Welcome";
 import { Loading } from "./components/ui";
 
 const NAV: { to: string; label: string; icon: string; perm?: "admin" }[] = [
@@ -31,6 +32,7 @@ function TopBar() {
   const app = useApp();
   return (
     <div className="topbar">
+      {me?.companies.length ? (<>
       <select aria-label="Company" value={app.companyId ?? ""} onChange={(e) => app.setCompanyId(Number(e.target.value))}>
         {me?.companies.map((c) => (
           <option key={c.id} value={c.id}>{c.name}</option>
@@ -43,6 +45,7 @@ function TopBar() {
           </option>
         ))}
       </select>
+      </>) : null}
       <select aria-label="Display unit" value={app.unit} onChange={(e) => app.setUnit(e.target.value)}>
         {Object.entries(UNIT_LABEL).map(([k, v]) => (
           <option key={k} value={k}>{v}</option>
@@ -90,6 +93,12 @@ export default function App() {
       <div className="main">
         <TopBar />
         <main className="content">
+          {!me.companies.length ? (
+            <Routes>
+              <Route path="/profile" element={<Profile />} />
+              <Route path="*" element={<Welcome />} />
+            </Routes>
+          ) : (
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/periods" element={<Periods />} />
@@ -104,6 +113,7 @@ export default function App() {
             <Route path="/profile" element={<Profile />} />
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
+          )}
         </main>
       </div>
     </div>
