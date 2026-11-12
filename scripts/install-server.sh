@@ -63,6 +63,18 @@ else
 fi
 DOMAIN="$(grep -E '^DOMAIN=' .env | cut -d= -f2- | tr -d '"' || true)"
 
+# ---------------------------------------------------------------- DNS check (HTTPS needs it)
+if [[ -n "${DOMAIN}" && "${DOMAIN}" != "localhost" ]]; then
+  dns_ip="$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
+  if [[ -z "${dns_ip}" ]]; then
+    echo "Note: ${DOMAIN} does not resolve yet. Add the DNS A record for it; HTTPS starts by itself once it"
+    echo "      points to this server."
+  elif ! hostname -I 2>/dev/null | tr ' ' '\n' | grep -qx "${dns_ip}"; then
+    echo "Note: ${DOMAIN} points to ${dns_ip}, but this server's address is $(hostname -I 2>/dev/null | awk '{print $1}')."
+    echo "      HTTPS starts by itself once the DNS A record points here."
+  fi
+fi
+
 # ---------------------------------------------------------------- firewall (when ufw is active)
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
   if [[ -n "${DOMAIN}" ]]; then ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null; ufw allow 443/udp >/dev/null
@@ -90,6 +102,22 @@ done
 if [[ "${ready}" != 1 ]]; then
   echo "The application did not start. See: docker compose logs app" >&2
   exit 1
+fi
+
+docker image prune -f >/dev/null 2>&1 || true      # remove images left over from earlier builds
+
+# ---------------------------------------------------------------- automatic security updates (Ubuntu / Debian)
+if [[ "$(id -u)" == 0 ]] && command -v apt-get >/dev/null 2>&1 && [[ ! -f /etc/apt/apt.conf.d/20auto-upgrades ]]; then
+  if yes_no "Install operating-system security updates automatically every day? [Y/n] " y; then
+    if DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 &&
+       DEBIAN_FRONTEND=noninteractive apt-get install -y -qq unattended-upgrades >/dev/null 2>&1; then
+      printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' \
+        > /etc/apt/apt.conf.d/20auto-upgrades
+      echo "Automatic security updates are on (reboot the server now and then; the application restarts itself)."
+    else
+      echo "Could not install unattended-upgrades; set it up later with: apt-get install unattended-upgrades" >&2
+    fi
+  fi
 fi
 
 # ---------------------------------------------------------------- daily backup

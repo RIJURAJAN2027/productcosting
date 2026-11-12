@@ -13,7 +13,9 @@ a managed PostgreSQL 14+ (see *External database*).
 
 `scripts/install-server.sh` asks three questions, writes `.env` with generated passwords and secrets,
 starts PostgreSQL and the application and – with a domain – an HTTPS proxy (Caddy) that obtains and
-renews a free Let's Encrypt certificate. It can also schedule a daily database backup.
+renews a free Let's Encrypt certificate. It warns when the domain does not point to the server yet,
+can turn on automatic operating-system security updates and schedule a daily database backup, and
+removes old images after upgrades.
 
 **On Hostinger** (*VPS* plans – the *Web*, *Cloud* and *WordPress* hosting plans run PHP / Node.js
 sites with MySQL and cannot run this application):
