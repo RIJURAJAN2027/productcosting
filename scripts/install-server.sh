@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-step installation on a Linux server – e.g. a Hostinger VPS with the "Ubuntu 24.04 with Docker"
-# template, or any Ubuntu/Debian server.
+# template, an Oracle Cloud "Always Free" Ubuntu instance (Arm), or any Ubuntu/Debian server.
 #
 #   git clone https://github.com/RIJURAJAN2027/productcosting.git
 #   cd productcosting
@@ -63,16 +63,35 @@ else
 fi
 DOMAIN="$(grep -E '^DOMAIN=' .env | cut -d= -f2- | tr -d '"' || true)"
 
-# ---------------------------------------------------------------- DNS check (HTTPS needs it)
+# ---------------------------------------------------------------- addresses and DNS check (HTTPS needs it)
+# cloud servers (Oracle, AWS, …) often have only a private address on the network card
+PUBLIC_IP="$(curl -fsS --max-time 5 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)"
+SERVER_IPS="$(hostname -I 2>/dev/null || true) ${PUBLIC_IP}"
 if [[ -n "${DOMAIN}" && "${DOMAIN}" != "localhost" ]]; then
   dns_ip="$(getent ahostsv4 "${DOMAIN}" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
   if [[ -z "${dns_ip}" ]]; then
     echo "Note: ${DOMAIN} does not resolve yet. Add the DNS A record for it; HTTPS starts by itself once it"
-    echo "      points to this server."
-  elif ! hostname -I 2>/dev/null | tr ' ' '\n' | grep -qx "${dns_ip}"; then
-    echo "Note: ${DOMAIN} points to ${dns_ip}, but this server's address is $(hostname -I 2>/dev/null | awk '{print $1}')."
+    echo "      points to this server${PUBLIC_IP:+ (${PUBLIC_IP})}."
+  elif ! printf '%s\n' ${SERVER_IPS} | grep -qx "${dns_ip}"; then
+    echo "Note: ${DOMAIN} points to ${dns_ip}, but this server's address is ${PUBLIC_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}."
     echo "      HTTPS starts by itself once the DNS A record points here."
   fi
+fi
+
+# ---------------------------------------------------------------- firewall: iptables (e.g. Oracle Cloud)
+# Oracle Cloud's Ubuntu images end the INPUT chain with a REJECT rule that also blocks web traffic.
+open_port_iptables() {  # $1 = port, $2 = tcp|udp
+  iptables -C INPUT -p "$2" -m state --state NEW --dport "$1" -j ACCEPT 2>/dev/null && return 0
+  local pos
+  pos="$(iptables -L INPUT --line-numbers -n 2>/dev/null | awk '$2 == "REJECT" {print $1; exit}')"
+  if [[ -n "${pos}" ]]; then iptables -I INPUT "${pos}" -p "$2" -m state --state NEW --dport "$1" -j ACCEPT; fi
+}
+if [[ "$(id -u)" == 0 ]] && command -v iptables >/dev/null 2>&1 \
+   && iptables -L INPUT -n 2>/dev/null | grep -q "^REJECT"; then
+  if [[ -n "${DOMAIN}" ]]; then open_port_iptables 80 tcp; open_port_iptables 443 tcp; open_port_iptables 443 udp
+  else open_port_iptables 8080 tcp; fi
+  if command -v netfilter-persistent >/dev/null 2>&1; then netfilter-persistent save >/dev/null 2>&1 || true; fi
+  echo "Firewall (iptables): web ports opened."
 fi
 
 # ---------------------------------------------------------------- firewall (when ufw is active)
@@ -132,7 +151,7 @@ fi
 if [[ -n "${DOMAIN}" ]]; then
   URL="https://${DOMAIN}"
 else
-  IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  IP="${PUBLIC_IP:-$(hostname -I 2>/dev/null | awk '{print $1}')}"
   URL="http://${IP:-this-server}:8080   (no HTTPS – set up a domain before entering real data)"
 fi
 bold "Product Costing is running: ${URL}"

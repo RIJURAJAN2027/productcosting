@@ -34,6 +34,30 @@ restore* regularly. If colleagues cannot connect, allow *Docker Desktop Backend*
 in Windows Defender Firewall. To update, download the new ZIP into the same folder (keep `.env`) and
 run the script again.
 
+### Oracle Cloud "Always Free" (Arm server)
+
+Oracle's Always Free tier includes an Arm (Ampere A1) virtual machine – at the time of writing 2 CPUs
+and 12 GB RAM – that runs this application with the same install script. Every Python and Docker
+component used has Arm builds; the first build on the server takes about 10 minutes.
+
+1. Sign up at <https://www.oracle.com/cloud/free/>. The **home region** cannot be changed later –
+   choose one near your users. A credit card is needed for verification.
+2. Recommended: *Billing & Cost Management → Upgrade and manage payment → Pay As You Go*. Always Free
+   resources stay free, and Oracle does not reclaim idle Always Free servers of paying accounts (this
+   application is idle most of the time). Add a small *Budget* with an e-mail alert as a safeguard.
+3. *Compute → Instances → Create instance*: image **Canonical Ubuntu 24.04**, shape **Ampere →
+   VM.Standard.A1.Flex** with 2 OCPUs and 12 GB memory (marked *Always Free-eligible*), a public
+   subnet with a public IPv4 address, and *Generate a key pair for me* – download the private key.
+   If Oracle reports *out of capacity*, try another availability domain or try again later.
+4. Allow web traffic in Oracle's network: open the instance's subnet → its **security list** → *Add
+   ingress rules* for source `0.0.0.0/0`, TCP, destination ports **80** and **443**.
+5. Point your (sub)domain's **A record** to the instance's public IP.
+6. Connect: `ssh -i <downloaded key> ubuntu@<public IP>` and run
+   `sudo apt update && sudo apt install -y git`, then
+   `sudo git clone https://github.com/RIJURAJAN2027/productcosting.git /opt/productcosting` and
+   `cd /opt/productcosting && sudo scripts/install-server.sh` (answer *yes* to installing Docker).
+   The script also opens ports 80 and 443 in the server's own firewall (Oracle's images block them).
+
 ### Windows Server (without Docker)
 
 Docker Desktop does not run on Windows Server, so the application runs directly on Windows: Python
