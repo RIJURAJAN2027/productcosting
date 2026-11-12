@@ -394,6 +394,7 @@ def list_mis(period: Period = Depends(get_period), db: Session = Depends(get_db)
 @router.post("/periods/{period_id}/mis", status_code=201)
 def add_mis(body: MisIn, company: Company = Depends(get_company), period: Period = Depends(get_period),
             user: User = Depends(require("edit")), db: Session = Depends(get_db)):
+    ensure_open(period)
     try:
         ex.parse(body.expr)
     except ex.ExpressionError as e:
@@ -409,6 +410,7 @@ def add_mis(body: MisIn, company: Company = Depends(get_company), period: Period
 @router.delete("/periods/{period_id}/mis/{mis_id}")
 def delete_mis(mis_id: int, period: Period = Depends(get_period), user: User = Depends(require("edit")),
                db: Session = Depends(get_db)):
+    ensure_open(period)
     m = db.get(MisLine, mis_id)
     if m is None or m.period_id != period.id:
         raise HTTPException(404, "Not found")

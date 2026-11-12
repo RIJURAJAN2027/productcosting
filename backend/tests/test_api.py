@@ -8,7 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
-os.environ["PC_DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
+# SQLite in memory by default; set PC_TEST_DATABASE_URL to run the same tests on PostgreSQL
+os.environ["PC_DATABASE_URL"] = os.environ.get("PC_TEST_DATABASE_URL", "sqlite+pysqlite:///:memory:")
 os.environ["PC_ENV"] = "test"
 
 from app.db import Base, SessionLocal, get_engine, reset_engine  # noqa: E402
@@ -25,6 +26,7 @@ PW = "Str0ngPassword!"
 def client():
     get_settings.cache_clear()
     reset_engine()
+    Base.metadata.drop_all(get_engine())
     Base.metadata.create_all(get_engine())
     init_db()
     db = SessionLocal()
@@ -229,6 +231,15 @@ def test_maker_checker_and_period_lock(client, H, company_id):
     assert lock.json()["status"] == "locked"
     assert client.post(f"/api/companies/{company_id}/periods/{p['id']}/runs", headers=H["analyst"],
                        json={}).status_code == 409
+    # every input of a locked period is read-only
+    base = f"/api/companies/{company_id}/periods/{p['id']}"
+    assert client.post(f"{base}/mis", headers=H["analyst"], json={"label": "x", "expr": "[L:pbt]",
+                                                                   "mis_value": 1}).status_code == 409
+    assert client.post(f"{base}/mc-adjustments", headers=H["analyst"], json={
+        "plant_code": "NTH", "pg_code": "GATE", "value": 1, "reason": "x"}).status_code == 409
+    assert client.put(f"{base}/drivers", headers=H["analyst"], json={"driver": "d", "values": {}}).status_code == 409
+    assert client.post(f"/api/companies/{company_id}/adjustments", headers=H["analyst"], json={
+        "type": "exclude_gl", "definition": {"gls": ["1"]}, "reason": "x", "period_id": p["id"]}).status_code == 409
     client.post(f"/api/companies/{company_id}/periods/{p['id']}/unlock", headers=H["admin"])
 
 

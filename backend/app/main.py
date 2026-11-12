@@ -36,6 +36,7 @@ Authenticate with `POST /api/auth/login` and send `Authorization: Bearer <token>
 
 def create_app() -> FastAPI:
     s = get_settings()
+    s.check_production()
     app = FastAPI(title="Product Costing & Profitability API", version=__version__, description=DESCRIPTION,
                   openapi_tags=[{"name": t} for t in ("auth", "administration", "masters", "periods & inputs",
                                                        "runs & reports")])
@@ -90,18 +91,21 @@ def init_db() -> None:
                     s.bootstrap_admin_email)
         if s.load_demo_company and s.env != "test":
             from .services.demo import create_demo_company, seed_demo_runs
-            demo_pw = hash_password("Demo@12345!")
-            analyst = User(tenant_id=tenant.id, email="analyst@demo.local", name="Demo Analyst", role="analyst",
-                           password_hash=demo_pw)
-            approver = User(tenant_id=tenant.id, email="approver@demo.local", name="Demo Approver",
-                            role="approver", password_hash=demo_pw)
-            viewer = User(tenant_id=tenant.id, email="viewer@demo.local", name="Demo Viewer", role="viewer",
-                          password_hash=demo_pw)
-            db.add_all([analyst, approver, viewer])
-            db.flush()
+            analyst = approver = None
+            if s.env != "production":
+                # sample users with a published password – never created on a production server
+                demo_pw = hash_password("Demo@12345!")
+                analyst = User(tenant_id=tenant.id, email="analyst@demo.local", name="Demo Analyst",
+                               role="analyst", password_hash=demo_pw)
+                approver = User(tenant_id=tenant.id, email="approver@demo.local", name="Demo Approver",
+                                role="approver", password_hash=demo_pw)
+                viewer = User(tenant_id=tenant.id, email="viewer@demo.local", name="Demo Viewer", role="viewer",
+                              password_hash=demo_pw)
+                db.add_all([analyst, approver, viewer])
+                db.flush()
             company = create_demo_company(db, tenant, admin)
             db.commit()
-            seed_demo_runs(db, company, analyst, approver)
+            seed_demo_runs(db, company, analyst or admin, approver)
 
 
 app = create_app()

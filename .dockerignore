@@ -1,0 +1,24 @@
+.git
+.github
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/node_modules
+frontend/dist
+docs
+scripts
+*.md
+.env
+.env.*
+!.env.example
+# customer data never goes into an image
+**/*.xlsx
+**/*.xlsm
+**/*.xls
+**/*.csv
+**/*.gz
+**/*.dump
+data
+uploads
+exports
+backups

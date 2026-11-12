@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: costing
+          POSTGRES_PASSWORD: costing
+          POSTGRES_DB: costing_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U costing -d costing_test" --health-interval 5s --health-timeout 5s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Unit and API tests (SQLite)
+        run: python -m pytest
+      - name: API tests on PostgreSQL
+        env:
+          PC_TEST_DATABASE_URL: postgresql+psycopg://costing:costing@localhost:5432/costing_test
+        run: python -m pytest tests/test_api.py
+      - name: Migrations match the models
+        env:
+          PC_DATABASE_URL: postgresql+psycopg://costing:costing@localhost:5432/costing_test
+        run: |
+          python -c "from app.db import Base, get_engine; from app import models; Base.metadata.drop_all(get_engine())"
+          alembic upgrade head
+          alembic check
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t productcosting:ci .

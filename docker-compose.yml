@@ -1,0 +1,48 @@
+# Product Costing & Profitability – application + PostgreSQL.
+#   cp .env.example .env      # then set the passwords and secret in .env
+#   docker compose up -d --build
+#   open http://localhost:8080
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: costing
+      POSTGRES_USER: costing
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U costing -d costing"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build: .
+    image: productcosting:${APP_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PC_ENV: production
+      PC_DATABASE_URL: postgresql+psycopg://costing:${POSTGRES_PASSWORD}@db:5432/costing
+      PC_SECRET_KEY: ${PC_SECRET_KEY:?set PC_SECRET_KEY in .env}
+      PC_ACCESS_TOKEN_MINUTES: ${PC_ACCESS_TOKEN_MINUTES:-720}
+      PC_BOOTSTRAP_TENANT: ${PC_BOOTSTRAP_TENANT:-Default}
+      PC_BOOTSTRAP_ADMIN_EMAIL: ${PC_BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
+      PC_BOOTSTRAP_ADMIN_PASSWORD: ${PC_BOOTSTRAP_ADMIN_PASSWORD:?set PC_BOOTSTRAP_ADMIN_PASSWORD in .env}
+      PC_LOAD_DEMO_COMPANY: ${PC_LOAD_DEMO_COMPANY:-true}
+      PC_MAX_UPLOAD_MB: ${PC_MAX_UPLOAD_MB:-50}
+      PC_CORS_ORIGINS: ${PC_CORS_ORIGINS:-}
+      PC_OIDC_ISSUER: ${PC_OIDC_ISSUER:-}
+      PC_OIDC_CLIENT_ID: ${PC_OIDC_CLIENT_ID:-}
+      PC_OIDC_CLIENT_SECRET: ${PC_OIDC_CLIENT_SECRET:-}
+      PC_OIDC_REDIRECT_URI: ${PC_OIDC_REDIRECT_URI:-}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    ports:
+      - "${APP_PORT:-8080}:8000"
+
+volumes:
+  pgdata:

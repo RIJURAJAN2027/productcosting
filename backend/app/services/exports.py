@@ -194,7 +194,7 @@ def report_pdf(report: dict) -> bytes:
                 data.append([row["label"]] + [""] * len(cols))
                 bold_rows.append(len(data) - 1)
             continue
-        data.append([row["label"][:48]] + [f"{v:,.2f}" if v else "–" for v in row["values"]])
+        data.append([row["label"][:48]] + [f"{v:,.2f}" if abs(v) >= 0.005 else "–" for v in row["values"]])
         if (row.get("style") or {}).get("bold"):
             bold_rows.append(len(data) - 1)
     widths = [70 * mm] + [max(16 * mm, (doc.width - 70 * mm) / max(1, len(cols)))] * len(cols)

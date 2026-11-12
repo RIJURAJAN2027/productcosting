@@ -141,7 +141,7 @@ export function ControlList({ controls, unitDiv, unitLabel }: {
           <summary>
             <Badge status={c.level}>{c.level.toUpperCase()}</Badge>
             <span style={{ fontWeight: 600 }}>{c.title}</span>
-            <span className="right mono">{fmt(c.amount * unitDiv, 4)} {unitLabel}</span>
+            <span className="right mono" style={{ whiteSpace: "nowrap" }}>{fmt(c.amount * unitDiv, 4)} {unitLabel}</span>
           </summary>
           {c.details?.length ? (
             <div className="table-wrap" style={{ marginTop: 8, maxHeight: 280 }}>
