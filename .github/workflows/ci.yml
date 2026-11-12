@@ -34,10 +34,10 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Unit and API tests (SQLite)
         run: python -m pytest
-      - name: API tests on PostgreSQL
+      - name: API and Windows set-up tests on PostgreSQL
         env:
           PC_TEST_DATABASE_URL: postgresql+psycopg://costing:costing@localhost:5432/costing_test
-        run: python -m pytest tests/test_api.py
+        run: python -m pytest tests/test_api.py tests/test_windows.py
       - name: Migrations match the models
         env:
           PC_DATABASE_URL: postgresql+psycopg://costing:costing@localhost:5432/costing_test

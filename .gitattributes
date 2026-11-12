@@ -8,3 +8,6 @@ docker/*    text eol=lf
 *.mako      text eol=lf
 .env.example text eol=lf
 *.png       binary
+# Windows batch files need Windows line endings
+*.cmd       text eol=crlf
+*.bat       text eol=crlf

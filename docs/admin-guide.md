@@ -34,6 +34,37 @@ restore* regularly. If colleagues cannot connect, allow *Docker Desktop Backend*
 in Windows Defender Firewall. To update, download the new ZIP into the same folder (keep `.env`) and
 run the script again.
 
+### Windows Server (without Docker)
+
+Docker Desktop does not run on Windows Server, so the application runs directly on Windows: Python
+for the application, PostgreSQL for the database, a scheduled task that starts the web server with
+Windows and restarts it if it stops, a nightly backup task and a Windows Firewall rule. Windows
+Server 2016 or later, 2 CPUs, 4 GB RAM and 10 GB free disk are enough for a team.
+
+1. **Python 3.13** – from <https://www.python.org/downloads/windows/> download the *Windows installer
+   (64-bit)* of the latest 3.13 release, run it, choose **Customize installation** and on the second
+   page tick **Install Python 3.13 for all users**, then *Install*.
+2. **PostgreSQL** – from <https://www.postgresql.org/download/windows/> download the installer (by
+   EDB), run it with the defaults, set a password for the database superuser **postgres** (keep it –
+   the installer below asks for it once), keep port 5432, and untick *Stack Builder* at the end.
+3. **The application** – take the Windows package **productcosting-windows.zip** (it contains the
+   ready-built web interface; the plain source-code download does not) and extract it to
+   `C:\ProductCosting`.
+4. **Install** – in `C:\ProductCosting\scripts` right-click **install-windows-server.cmd → Run as
+   administrator**. It installs the Python packages, asks for the administrator's e-mail, the
+   organisation name and the PostgreSQL password, creates the application's own database login,
+   writes `backend\.env` with generated secrets, prepares the database, registers the tasks
+   *ProductCosting* (web server, at start-up) and *ProductCosting Backup* (02:15 every night into
+   `C:\ProductCosting\backups`, kept 30 days), opens TCP 8080 in Windows Firewall for domain and
+   private networks and starts the application. It prints the address and the administrator password.
+5. Users open `http://<server name>:8080`. For HTTPS, publish it through IIS (URL Rewrite + ARR) or
+   your company's reverse proxy with your certificate (see *HTTPS* below).
+
+Logs are in `C:\ProductCosting\logs`. To **upgrade**, extract the new package over the folder (keep
+`backend\.env`) and run the installer again; it updates the packages, migrates the database and
+restarts the application. The tasks can be checked in *Task Scheduler*. Without the package, the web
+interface can be built with Node.js 20+: `cd frontend`, `npm ci`, `npm run build`.
+
 ### Quickest: the install script (Hostinger VPS or any Ubuntu server)
 
 `scripts/install-server.sh` asks three questions, writes `.env` with generated passwords and secrets,

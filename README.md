@@ -57,6 +57,13 @@ Install Docker Desktop, download this repository as a ZIP, then right-click
 `scripts\install-windows.ps1` → *Run with PowerShell*. It generates the passwords, starts everything
 and opens <http://localhost:8080>. Details: [admin guide](docs/admin-guide.md#on-a-windows-pc-or-laptop).
 
+## Run on Windows Server (without Docker)
+
+Install Python 3.13 and PostgreSQL, extract the Windows package `productcosting-windows.zip` to
+`C:\ProductCosting` and run `scripts\install-windows-server.cmd` as administrator: it creates the
+database, starts the application with Windows, schedules nightly backups and opens the firewall
+port. Details: [admin guide](docs/admin-guide.md#windows-server-without-docker).
+
 ## Deploy on a server (e.g. Hostinger VPS)
 
 ```bash

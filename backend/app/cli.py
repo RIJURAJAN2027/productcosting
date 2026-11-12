@@ -7,6 +7,8 @@
                                                --fix / --excel FILE also show the import corrections' effect
     python -m app.cli import-workbook FILE --company CODE [--period CODE ...]
                                                import a legacy workbook straight into the database
+    python -m app.cli setup-windows            install on Windows Server without Docker (see install-windows-server.cmd)
+    python -m app.cli backup --out DIR         pg_dump the database into DIR (keeps 30 days)
     python -m app.cli set-password EMAIL       set a user's password (reads it from PC_NEW_PASSWORD or asks)
     python -m app.cli create-admin EMAIL       create an extra administrator in the first organisation
 """
@@ -152,6 +154,17 @@ def cmd_import_workbook(args: argparse.Namespace) -> None:
         print(f"Period {args.period} loaded with the workbook's trial balances; calculate it in the application.")
 
 
+def cmd_setup_windows(args: argparse.Namespace) -> None:
+    from .windows import setup_windows
+    setup_windows(Path(args.root), args.port)
+
+
+def cmd_backup(args: argparse.Namespace) -> None:
+    from .windows import backup
+    target = backup(Path(args.out), args.keep_days)
+    print(f"Backup written to {target}")
+
+
 def cmd_set_password(args: argparse.Namespace) -> None:
     from .db import session_scope
     from .models import User
@@ -213,6 +226,14 @@ def main(argv: list[str] | None = None) -> None:
     iw.add_argument("--end", help="period end date YYYY-MM-DD")
     iw.add_argument("--no-fix", action="store_true", help="import as-is, without the error corrections")
     iw.set_defaults(func=cmd_import_workbook)
+    sw = sub.add_parser("setup-windows", help="install on Windows Server without Docker (run as administrator)")
+    sw.add_argument("--root", default=str(Path(__file__).resolve().parents[2]), help="installation folder")
+    sw.add_argument("--port", type=int, default=8080)
+    sw.set_defaults(func=cmd_setup_windows)
+    bk = sub.add_parser("backup", help="pg_dump the database into a folder (PostgreSQL client tools needed)")
+    bk.add_argument("--out", default="backups")
+    bk.add_argument("--keep-days", type=int, default=30)
+    bk.set_defaults(func=cmd_backup)
     sp = sub.add_parser("set-password", help="set a user's password")
     sp.add_argument("email")
     sp.set_defaults(func=cmd_set_password)

@@ -58,7 +58,7 @@ def create_app() -> FastAPI:
     async def value_error(_, exc: ValueError):
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 
-    dist = Path(s.frontend_dist) if s.frontend_dist else None
+    dist = Path(s.frontend_dist).resolve() if s.frontend_dist else None
     if dist and dist.exists():
         @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
         def spa(path: str):
