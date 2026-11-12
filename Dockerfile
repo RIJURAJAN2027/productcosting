@@ -37,7 +37,9 @@ COPY backend/alembic ./alembic
 COPY backend/alembic.ini ./
 COPY --from=ui /ui/dist ./static
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh && chown -R costing:costing /app
+# strip Windows line endings in case the files were checked out on Windows
+RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod 0755 /usr/local/bin/entrypoint.sh \
+    && chown -R costing:costing /app
 USER costing
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \

@@ -51,6 +51,12 @@ company*, select it, then *Administration → Import legacy workbook*. The impor
 every value of the workbook and then corrects known workbook errors (plugs, GLs that never reach the
 P&L), listing each correction and its effect. See the [admin guide](docs/admin-guide.md).
 
+## Run on a Windows PC or laptop
+
+Install Docker Desktop, download this repository as a ZIP, then right-click
+`scripts\install-windows.ps1` → *Run with PowerShell*. It generates the passwords, starts everything
+and opens <http://localhost:8080>. Details: [admin guide](docs/admin-guide.md#on-a-windows-pc-or-laptop).
+
 ## Deploy on a server (e.g. Hostinger VPS)
 
 ```bash

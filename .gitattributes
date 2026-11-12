@@ -1,0 +1,10 @@
+# Shell scripts and container files keep Unix line endings, also when checked out on Windows
+# (Git for Windows converts to CRLF by default, which breaks scripts inside Linux containers).
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+docker/*    text eol=lf
+*.py        text eol=lf
+*.ini       text eol=lf
+*.mako      text eol=lf
+.env.example text eol=lf
+*.png       binary

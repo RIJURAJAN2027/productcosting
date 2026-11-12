@@ -9,6 +9,31 @@ Requirements: a Linux server or VM with Docker Engine 24+ and the Compose plugin
 20 GB disk (more for many years of runs). Any cloud VM works the same way; the database can also be
 a managed PostgreSQL 14+ (see *External database*).
 
+### On a Windows PC or laptop
+
+Good for trying the software and for a few users in one office. The application is available only
+while the computer is on (and awake) with Docker Desktop running; colleagues on the same network use
+`http://<computer's IP address>:8080`.
+
+1. Install **Docker Desktop** from <https://www.docker.com/products/docker-desktop/> (accept the WSL 2
+   option, restart if asked) and start it. Docker Desktop is free for personal use and for companies
+   with fewer than 250 employees and less than USD 10 million annual revenue.
+2. Download the software: on <https://github.com/RIJURAJAN2027/productcosting> click **Code → Download
+   ZIP** and extract it, e.g. to `C:\ProductCosting`.
+3. In that folder open `scripts`, right-click **install-windows.ps1 → Run with PowerShell**. It asks
+   for the administrator's e-mail and the organisation name, creates `.env` with generated passwords,
+   builds and starts everything (5–10 minutes the first time) and opens <http://localhost:8080>. The
+   window shows the administrator password – keep it, and change it after signing in.
+4. After restarting the computer: start Docker Desktop (the application starts with it), or run the
+   script again. Docker Desktop → *Settings → General → Start Docker Desktop when you sign in* makes
+   this automatic.
+
+Notes for a laptop: turn on BitLocker (the database holds confidential figures), stop it from
+sleeping while others use the application, and download a backup from *Administration → Backup &
+restore* regularly. If colleagues cannot connect, allow *Docker Desktop Backend* for private networks
+in Windows Defender Firewall. To update, download the new ZIP into the same folder (keep `.env`) and
+run the script again.
+
 ### Quickest: the install script (Hostinger VPS or any Ubuntu server)
 
 `scripts/install-server.sh` asks three questions, writes `.env` with generated passwords and secrets,
