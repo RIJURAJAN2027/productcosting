@@ -286,3 +286,118 @@ def test_backup_and_restore(client, H, company_id):
     runs = client.get(f"/api/companies/{new_id}/runs", headers=H["admin"]).json()
     assert runs and client.get(f"/api/runs/{runs[0]['id']}/reports/plant_wise",
                                headers=H["admin"]).status_code == 200
+
+
+# ----------------------------------------------------------------------- master sheet
+def master_xlsx(header_row, rows):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Masters"
+    ws.append(["Business areas"])
+    ws.append(header_row)
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+MASTER_HEAD = ["BA", "Plant", "COM/\nCOR/ PG", "Product \nfamily", None, "GL", "GL Descript", "Category1", None,
+               "Cost \ncentre", "Cost centre descrip", "BArea", "Function", "Allocation logic"]
+
+
+def test_master_sheet_roundtrip_is_unchanged(client, H, company_id):
+    base = f"/api/companies/{company_id}/master-sheet"
+    sheet = client.get(base, headers=H["viewer"]).json()
+    assert sheet["stats"]["ba"]["rows"] > 0 and sheet["stats"]["gl"]["rows"] > 0 and sheet["stats"]["cc"]["rows"] > 0
+    assert [c["header"] for c in sheet["columns"]["cc"]] == ["Cost centre", "Cost centre descrip", "BArea",
+                                                             "Function", "Allocation logic"]
+    x = client.get(f"{base}/export", headers=H["viewer"])
+    assert x.status_code == 200
+    ws = load_workbook(io.BytesIO(x.content))["Masters"]
+    assert [ws.cell(2, c).value for c in (1, 2, 6, 8, 10, 12, 14)] == ["BA", "Plant", "GL", "Category1",
+                                                                       "Cost centre", "BArea", "Allocation logic"]
+    r = client.post(f"{base}/import", headers=H["analyst"], files={"file": ("m.xlsx", x.content)},
+                    data={"dry_run": "true"})
+    assert r.status_code == 200, r.text
+    for sec in ("ba", "gl", "cc"):
+        s = r.json()["sections"][sec]
+        assert not s["added"] and not s["changed"] and not s["removed"], (sec, s)
+
+
+def test_master_sheet_addon_upload_and_versions(client, H, company_id):
+    base = f"/api/companies/{company_id}/master-sheet"
+    before = client.get(base, headers=H["viewer"]).json()
+    cc0 = before["sections"]["cc"][0]
+    other_alloc = "GLOBE" if cc0["function"] != "GLOBE" else "GATE"
+    rows = [
+        ["NTH_NEWBA", "NTH", "GATE", "Linear", None, 88001, "New wages GL", "Wages", None,
+         "NTH-NEWCC", "New cost centre", "NTH_GATE", "Quality", "QC"],
+        [None, None, None, None, None, 88002, "Old GL no longer used", "Excluded", None,
+         cc0["code"], None, None, None, other_alloc],
+    ]
+    data = master_xlsx(MASTER_HEAD, rows)
+    prev = client.post(f"{base}/import", headers=H["analyst"], files={"file": ("addon.xlsx", data)},
+                       data={"effective_from": "2027-02-01", "dry_run": "true"}).json()
+    assert prev["sections"]["ba"]["added"] == ["NTH_NEWBA"]
+    assert set(prev["sections"]["gl"]["added"]) == {"88001", "88002"}
+    assert prev["sections"]["cc"]["added"] == ["NTH-NEWCC"]
+    assert [c["code"] for c in prev["sections"]["cc"]["changed"]] == [cc0["code"]]
+    assert prev["sections"]["cc"]["not_in_file"] > 0       # the rest are kept
+    # dry run wrote nothing
+    assert client.get(base, headers=H["viewer"]).json()["stats"] == before["stats"]
+
+    r = client.post(f"{base}/import", headers=H["analyst"], files={"file": ("addon.xlsx", data)},
+                    data={"effective_from": "2027-02-01", "dry_run": "false"})
+    assert r.status_code == 200, r.text
+    new = client.get(base, params={"on": "2027-02-01"}, headers=H["viewer"]).json()
+    old = client.get(base, params={"on": "2027-01-31"}, headers=H["viewer"]).json()
+    gl = {g["code"]: g for g in new["sections"]["gl"]}
+    assert gl["88001"]["gl_type"] == "PRE" and gl["88002"]["gl_type"] == "EXCLUDED"
+    assert gl["88002"]["category"] == "Excluded"
+    cc = {c["code"]: c for c in new["sections"]["cc"]}
+    assert cc["NTH-NEWCC"]["plant_code"] == "NTH" and cc["NTH-NEWCC"]["function_name"] == "Quality"
+    assert cc[cc0["code"]]["function"] == other_alloc
+    assert cc[cc0["code"]]["description"] == cc0["description"]        # blank cell kept the value
+    old_cc = {c["code"]: c for c in old["sections"]["cc"]}
+    assert old_cc[cc0["code"]]["function"] == cc0["function"]           # earlier periods keep the old mapping
+    assert "NTH-NEWCC" not in old_cc
+    assert len(new["sections"]["cc"]) == len(before["sections"]["cc"]) + 1
+
+
+def test_master_sheet_manual_edit(client, H, company_id):
+    base = f"/api/companies/{company_id}/master-sheet"
+    assert client.put(base, headers=H["viewer"], json={}).status_code == 403
+    r = client.put(base, headers=H["analyst"], json={
+        "effective_from": "2027-03-01",
+        "ba": {"upserts": [{"code": "NTH_NEWBA", "family": "Rotary"}]},
+        "cc": {"upserts": [{"code": "NTH-NEWCC", "function_name": ""}], "deletes": []},
+        "gl": {"deletes": ["88002"]},
+    })
+    assert r.status_code == 200, r.text
+    mar = client.get(base, params={"on": "2027-03-01"}, headers=H["viewer"]).json()
+    feb = client.get(base, params={"on": "2027-02-15"}, headers=H["viewer"]).json()
+    assert {b["code"]: b for b in mar["sections"]["ba"]}["NTH_NEWBA"]["family"] == "Rotary"
+    assert {b["code"]: b for b in feb["sections"]["ba"]}["NTH_NEWBA"]["family"] == "Linear"
+    assert {c["code"]: c for c in mar["sections"]["cc"]}["NTH-NEWCC"]["function_name"] is None
+    assert "88002" not in {g["code"] for g in mar["sections"]["gl"]}
+    assert "88002" in {g["code"] for g in feb["sections"]["gl"]}
+    items = client.get("/api/audit", params={"company_id": company_id, "entity": "master_sheet"},
+                       headers=H["admin"]).json()
+    assert any(a["action"] == "master_sheet_edit" for a in items)
+    assert any(a["action"] == "master_sheet_upload_file" for a in items)
+
+
+def test_master_sheet_pending_codes_from_tb(client, H, company_id):
+    r = client.post(f"/api/companies/{company_id}/periods", headers=H["analyst"],
+                    json={"code": "2027-04", "label": "Pending test", "end_date": "2027-04-30",
+                          "start_date": "2027-04-01"})
+    pid = r.json()["id"]
+    data = tb_xlsx([(50000, "Sales - Domestic", [-100.0, -5.0]), (77777, "Brand new expense", [0.0, 9.0])],
+                   ["NTH_GATE", "QQQ_NEW"])
+    client.post(f"/api/companies/{company_id}/periods/{pid}/uploads", headers=H["analyst"],
+                data={"kind": "BA_TB"}, files={"file": ("tb.xlsx", data)})
+    p = client.get(f"/api/companies/{company_id}/master-sheet/pending", params={"period_id": pid},
+                   headers=H["viewer"]).json()
+    assert [b["code"] for b in p["ba"]] == ["QQQ_NEW"]
+    assert [g["code"] for g in p["gl"]] == ["77777"] and p["gl"][0]["description"] == "Brand new expense"

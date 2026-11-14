@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import func, select
 
 from . import __version__
-from .api import admin, auth, masters, periods, runs
+from .api import admin, auth, master_sheet, masters, periods, runs
 from .db import Base, get_engine, session_scope
 from .migrate import BOOTSTRAP_LOCK, advisory_xact_lock, migrate
 from .models import Tenant, User
@@ -45,7 +45,7 @@ def create_app() -> FastAPI:
                                                        "runs & reports")])
     app.add_middleware(CORSMiddleware, allow_origins=s.cors_list, allow_credentials=True, allow_methods=["*"],
                        allow_headers=["*"], expose_headers=["Content-Disposition"])
-    for r in (auth.router, admin.router, masters.router, periods.router, runs.router):
+    for r in (auth.router, admin.router, masters.router, master_sheet.router, periods.router, runs.router):
         app.include_router(r)
 
     @app.get("/api/health", tags=["auth"])

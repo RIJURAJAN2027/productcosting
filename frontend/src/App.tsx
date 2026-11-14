@@ -9,6 +9,7 @@ import Runs from "./pages/Runs";
 import Reports from "./pages/Reports";
 import Compare from "./pages/Compare";
 import Masters from "./pages/Masters";
+import MasterSheet from "./pages/MasterSheet";
 import Adjustments from "./pages/Adjustments";
 import Audit from "./pages/Audit";
 import Admin from "./pages/Admin";
@@ -22,6 +23,7 @@ type NavItem = { to: string; label: string; short: string; icon: IconName; group
 // Every product-costing feature, in workflow order: inputs → calculation → analysis → set-up.
 const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", short: "Dashboard", icon: "dashboard", group: "Overview" },
+  { to: "/master", label: "Master dashboard", short: "Master", icon: "sheet", group: "Inputs" },
   { to: "/periods", label: "Periods & uploads", short: "Trial balances", icon: "upload", group: "Inputs" },
   { to: "/adjustments", label: "Adjustments & inputs", short: "Adjustments", icon: "adjust", group: "Inputs" },
   { to: "/runs", label: "Calculations", short: "Calculations", icon: "calc", group: "Costing" },
@@ -211,6 +213,7 @@ export default function App() {
             <Route path="/runs/:runId" element={<Runs />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/compare" element={<Compare />} />
+            <Route path="/master" element={<MasterSheet />} />
             <Route path="/masters" element={<Masters />} />
             <Route path="/audit" element={<Audit />} />
             <Route path="/admin" element={can("admin") ? <Admin /> : <Navigate to="/" />} />

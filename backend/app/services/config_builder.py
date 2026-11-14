@@ -108,7 +108,8 @@ def save_engine_config(db: Session, company: Company, cfg: dict, effective_from:
         e = cc_extra.get(code, {})
         db.add(CostCentre(company_id=company.id, code=code, description=str(e.get("description") or "")[:300],
                           business_area=info.get("barea"), plant_code=info.get("plant"),
-                          function=info.get("function"), effective_from=effective_from))
+                          function=info.get("function"), function_name=e.get("function_name") or None,
+                          effective_from=effective_from))
     for i, c in enumerate(cfg["categories"]):
         db.add(Category(company_id=company.id, name=c["name"], sign=int(c.get("sign", 1)), sort_order=i,
                         group_name=c.get("group"), effective_from=effective_from))

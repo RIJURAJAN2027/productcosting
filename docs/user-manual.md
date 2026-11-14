@@ -16,10 +16,14 @@ Calculations follow **maker-checker**: the person who submits a run cannot appro
 
 ## The screen
 
-* The top bar selects the **company**, the **period** and the **display unit** (₹, thousand, lakh,
-  million, crore). Your choices are remembered on this browser.
-* The left menu holds the pages below. On a phone the menu sits at the top.
-* *Theme* switches between light, dark and your system setting.
+* The header shows the company logo and selects the **company**, the **period** and the **display
+  unit** (₹, thousand, lakh, million, crore). Your choices are remembered on this browser.
+* Below it, a tab for every feature (Dashboard, Master, Trial balances, Adjustments, Calculations,
+  P&L reports, Compare, Masters, Audit trail, Admin) and quick actions: *Upload TB*, *Run calculation*
+  and *Reports*.
+* The left menu holds the same pages, grouped; ☰ collapses it to icons. On a phone only the tabs show.
+* The sun / moon button switches between system, light and dark theme; your name opens *Profile* and
+  *Sign out*.
 
 ## Monthly process
 
@@ -46,7 +50,7 @@ The importer finds the header row itself, ignores blank and total rows and match
 name, so column order does not matter. The validation window lists:
 
 * **new GLs, business areas or cost centres** not in the masters, with their amounts – add them on the
-  *Masters* page (or import the masters workbook) and recalculate; nothing is dropped meanwhile, the
+  *Master* page (they are listed there, one click puts them on the sheet) and recalculate; nothing is dropped meanwhile, the
   amounts are flagged in the controls;
 * duplicate columns or GLs, non-numeric cells, rows whose *Total* column disagrees with the sum of the
   columns, and ignored helper columns.
@@ -130,6 +134,44 @@ report on A3 landscape.
 Key figures of the selected period with the variance to budget (when a budget period with the same
 period code exists, e.g. actual `2026-09` and budget `2026-09`), the trend of sales, gross margin and PBT over the periods, sales and PBT by plant
 and the profitability of each product group.
+
+## Master dashboard
+
+The *Master* tab shows the master in the layout of the workbook's Masters sheet – three lists side by
+side:
+
+| Business areas | | GL accounts | | Cost centres |
+|---|---|---|---|---|
+| BA · Plant · COM/COR/PG · Product family | | GL · GL Descript · Category1 | | Cost centre · Cost centre descrip · BArea · Function · Allocation logic |
+
+* **Changes apply from** – choose the period from which edits and uploads take effect (*… onwards*,
+  *Upcoming periods* or *All periods*). The sheet shows the master valid on that date. A changed or
+  removed row is closed the day before and a new version starts, so the next months and years pick up
+  the change automatically when they are calculated, while earlier periods keep their mapping.
+  *All periods* changes rows in place.
+* **Edit in the browser** – click a cell, type, press Enter (suggestions come from the masters).
+  *Add* inserts a row in a list; × on the code removes a row. Changed cells are yellow, new rows green,
+  removed rows red, cells still to be mapped amber. *Save changes* applies everything at once.
+* **Filter** – type in the filter row under a header (`(blank)` finds empty cells); *Only rows that need
+  mapping* shows incomplete rows.
+* **Upload Excel** – upload the same format: the whole master or **only the add-ons**. Columns are found
+  by header name. You see a preview (new, changed with before / after, unchanged, not in the file)
+  before anything is saved. Blank cells never clear a value and codes missing from the file are kept,
+  unless you tick *Also remove codes that are not in the file*.
+* **Download Excel** – the sheet in the same layout, with filters, ready to edit and upload again.
+* **New in trial balances** – GLs, business areas and cost centres in the selected period's uploaded
+  TBs that are not in the master, with their amounts. *Add all to the sheet* puts them on the sheet
+  with their descriptions; fill in the mapping and save.
+
+Rules the sheet applies for you:
+
+* *Category1* decides the GL type: a PRE category (Wages, Salaries, Others by default) makes a PRE GL,
+  `Excluded` leaves the GL out of the P&L, any other category is Non-PRE.
+* The plant of a cost centre comes from its *BArea* (the business area's plant).
+* *Allocation logic* is the product group, COM, COR or PRE function the cost centre's costs go to.
+  Plants, product groups, categories and PRE functions themselves are set up on the *Masters* page;
+  the upload preview lists values that are not set up yet.
+* Every save and upload is recorded in the audit trail.
 
 ## Masters
 

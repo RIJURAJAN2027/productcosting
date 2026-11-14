@@ -134,6 +134,7 @@ class CostCentre(VersionedMixin, TimestampMixin, Base):
     business_area: Mapped[str | None] = mapped_column(String(60), nullable=True)
     plant_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     function: Mapped[str | None] = mapped_column(String(60), nullable=True)   # PG code or service function
+    function_name: Mapped[str | None] = mapped_column(String(120), nullable=True)   # e.g. "Quality" (display)
 
 
 class Category(VersionedMixin, TimestampMixin, Base):
