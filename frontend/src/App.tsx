@@ -1,4 +1,5 @@
-import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useApp, useAuth } from "./context";
 import { UNIT_LABEL } from "./format";
 import Login from "./pages/Login";
@@ -14,84 +15,187 @@ import Admin from "./pages/Admin";
 import Profile from "./pages/Profile";
 import Welcome from "./pages/Welcome";
 import { Loading } from "./components/ui";
+import { Icon, type IconName } from "./components/icons";
 
-const NAV: { to: string; label: string; icon: string; perm?: "admin" }[] = [
-  { to: "/", label: "Dashboard", icon: "◧" },
-  { to: "/periods", label: "Periods & uploads", icon: "⇪" },
-  { to: "/adjustments", label: "Adjustments & inputs", icon: "±" },
-  { to: "/runs", label: "Calculations", icon: "▶" },
-  { to: "/reports", label: "Reports", icon: "▤" },
-  { to: "/compare", label: "Compare", icon: "⇆" },
-  { to: "/masters", label: "Masters", icon: "☰" },
-  { to: "/audit", label: "Audit trail", icon: "⌚" },
-  { to: "/admin", label: "Administration", icon: "⚙", perm: "admin" },
+type NavItem = { to: string; label: string; short: string; icon: IconName; group: string; perm?: "admin" };
+
+// Every product-costing feature, in workflow order: inputs → calculation → analysis → set-up.
+const NAV: NavItem[] = [
+  { to: "/", label: "Dashboard", short: "Dashboard", icon: "dashboard", group: "Overview" },
+  { to: "/periods", label: "Periods & uploads", short: "Trial balances", icon: "upload", group: "Inputs" },
+  { to: "/adjustments", label: "Adjustments & inputs", short: "Adjustments", icon: "adjust", group: "Inputs" },
+  { to: "/runs", label: "Calculations", short: "Calculations", icon: "calc", group: "Costing" },
+  { to: "/reports", label: "Reports", short: "P&L reports", icon: "reports", group: "Analysis" },
+  { to: "/compare", label: "Compare", short: "Compare", icon: "compare", group: "Analysis" },
+  { to: "/masters", label: "Masters", short: "Masters", icon: "masters", group: "Set-up" },
+  { to: "/audit", label: "Audit trail", short: "Audit trail", icon: "audit", group: "Set-up" },
+  { to: "/admin", label: "Administration", short: "Admin", icon: "admin", group: "Set-up", perm: "admin" },
 ];
 
-function TopBar() {
-  const { me } = useAuth();
-  const app = useApp();
+const THEMES: { v: "auto" | "light" | "dark"; icon: IconName; label: string }[] = [
+  { v: "auto", icon: "monitor", label: "System theme" },
+  { v: "light", icon: "sun", label: "Light theme" },
+  { v: "dark", icon: "moon", label: "Dark theme" },
+];
+
+function initials(s: string) {
+  return s.split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("");
+}
+
+function UserMenu() {
+  const { me, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const loc = useLocation();
+  useEffect(() => setOpen(false), [loc.pathname]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  if (!me) return null;
   return (
-    <div className="topbar">
-      {me?.companies.length ? (<>
-      <select aria-label="Company" value={app.companyId ?? ""} onChange={(e) => app.setCompanyId(Number(e.target.value))}>
-        {me?.companies.map((c) => (
-          <option key={c.id} value={c.id}>{c.name}</option>
-        ))}
-      </select>
-      <select aria-label="Period" value={app.periodId ?? ""} onChange={(e) => app.setPeriodId(Number(e.target.value))}>
-        {app.periods.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.label || p.code} {p.scenario !== "actual" ? `(${p.scenario})` : ""} {p.status === "locked" ? "🔒" : ""}
-          </option>
-        ))}
-      </select>
-      </>) : null}
-      <select aria-label="Display unit" value={app.unit} onChange={(e) => app.setUnit(e.target.value)}>
-        {Object.entries(UNIT_LABEL).map(([k, v]) => (
-          <option key={k} value={k}>{v}</option>
-        ))}
-      </select>
-      <span className="grow" />
-      <select aria-label="Theme" value={app.theme} onChange={(e) => app.setTheme(e.target.value as "auto" | "light" | "dark")}>
-        <option value="auto">Theme: system</option>
-        <option value="light">Theme: light</option>
-        <option value="dark">Theme: dark</option>
-      </select>
+    <div className="user-menu" ref={ref}>
+      <button className="user-chip" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="menu">
+        <span className="avatar">{initials(me.name || me.email)}</span>
+        <span className="who-text">
+          <strong>{me.name || me.email}</strong>
+          <small>{me.role.replace(/_/g, " ")}</small>
+        </span>
+        <Icon name="chevron" size={14} />
+      </button>
+      {open ? (
+        <div className="menu" role="menu">
+          <div className="menu-head">
+            <strong>{me.name || me.email}</strong>
+            <span className="muted small">{me.email} · {me.tenant.name}</span>
+          </div>
+          <Link to="/profile" role="menuitem"><Icon name="user" size={16} />Profile</Link>
+          <button role="menuitem" onClick={logout}><Icon name="logout" size={16} />Sign out</button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
+function AppBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+  const { me, can } = useAuth();
+  const app = useApp();
+  const next = THEMES[(THEMES.findIndex((t) => t.v === app.theme) + 1) % THEMES.length];
+  const cur = THEMES.find((t) => t.v === app.theme) ?? THEMES[0];
+  const hasCompany = !!me?.companies.length;
+  return (
+    <header className="appbar">
+      <div className="appbar-top">
+        <button className="icon-btn" onClick={onToggleSidebar} aria-label="Toggle navigation"><Icon name="menu" /></button>
+        <Link to="/" className="brand-long" aria-label="Home">
+          <img src="/brand/logo-long.png" alt="L&T Valves" />
+        </Link>
+        <span className="brand-divider" aria-hidden />
+        <div className="app-title">
+          <strong>Product Costing &amp; Profitability</strong>
+          <small>{app.company?.name ?? me?.tenant.name}</small>
+        </div>
+        <span className="grow" />
+        <div className="filters">
+          {hasCompany ? (<>
+            <label className="filter">
+              <span>Company</span>
+              <select value={app.companyId ?? ""} onChange={(e) => app.setCompanyId(Number(e.target.value))}>
+                {me?.companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </label>
+            <label className="filter">
+              <span>Period</span>
+              <select value={app.periodId ?? ""} onChange={(e) => app.setPeriodId(Number(e.target.value))}>
+                {app.periods.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label || p.code} {p.scenario !== "actual" ? `(${p.scenario})` : ""} {p.status === "locked" ? "🔒" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>) : null}
+          <label className="filter">
+            <span>Unit</span>
+            <select value={app.unit} onChange={(e) => app.setUnit(e.target.value)}>
+              {Object.entries(UNIT_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </label>
+        </div>
+        <button className="icon-btn" onClick={() => app.setTheme(next.v)} aria-label={`${cur.label} – switch to ${next.label.toLowerCase()}`} title={cur.label}>
+          <Icon name={cur.icon} />
+        </button>
+        <UserMenu />
+      </div>
+      {hasCompany ? (
+        <nav className="modulebar" aria-label="Features">
+          {NAV.filter((n) => !n.perm || can(n.perm)).map((n) => (
+            <NavLink key={n.to} to={n.to} end={n.to === "/"} className="module">
+              <Icon name={n.icon} size={16} />{n.short}
+            </NavLink>
+          ))}
+          <span className="grow" />
+          {can("edit") ? (<>
+            <Link className="quick" to="/periods" title="Upload trial balances"><Icon name="upload" size={15} /><span>Upload TB</span></Link>
+            <Link className="quick" to="/runs" title="Run calculation"><Icon name="play" size={14} /><span>Run calculation</span></Link>
+          </>) : null}
+          <Link className="quick primary" to="/reports" title="Reports and exports"><Icon name="download" size={15} /><span>Reports</span></Link>
+        </nav>
+      ) : null}
+    </header>
+  );
+}
+
+function Sidebar({ collapsed }: { collapsed: boolean }) {
+  const { me, can } = useAuth();
+  const items = NAV.filter((n) => !n.perm || can(n.perm));
+  const groups = [...new Set(items.map((n) => n.group))];
+  return (
+    <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
+      <Link to="/" className="brand">
+        <img src="/brand/logo-short.png" alt="L&T" />
+        <div className="brand-text">Product Costing<small>& Profitability</small></div>
+      </Link>
+      <nav className="nav">
+        {me?.companies.length ? groups.map((g) => (
+          <div key={g}>
+            <div className="section">{g}</div>
+            {items.filter((n) => n.group === g).map((n) => (
+              <NavLink key={n.to} to={n.to} end={n.to === "/"} title={collapsed ? n.label : undefined}>
+                <Icon name={n.icon} />
+                <span className="label">{n.label}</span>
+              </NavLink>
+            ))}
+          </div>
+        )) : null}
+      </nav>
+      <div className="spacer" />
+      <div className="sidebar-foot">
+        <div className="tenant">{me?.tenant.name}</div>
+        <div className="muted small">Product costing v1</div>
+      </div>
+    </aside>
+  );
+}
+
 export default function App() {
-  const { me, loading, logout, can } = useAuth();
+  const { me, loading, can } = useAuth();
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("pc_nav_collapsed") === "1");
+  const toggle = () => {
+    setCollapsed((c) => {
+      try { localStorage.setItem("pc_nav_collapsed", c ? "0" : "1"); } catch { /* storage blocked */ }
+      return !c;
+    });
+  };
   if (loading) return <Loading what="Starting" />;
   if (!me) return <Login />;
   return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden><rect width="32" height="32" rx="7" fill="rgba(255,255,255,.15)" /><path d="M8 22V12m6 10V8m6 14v-7m6 7V11" stroke="#fff" strokeWidth="3" strokeLinecap="round" /></svg>
-          <div>Product Costing<small>& Profitability</small></div>
-        </div>
-        <nav className="nav">
-          {NAV.filter((n) => !n.perm || can(n.perm)).map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.to === "/"}>
-              <span aria-hidden style={{ width: 18, textAlign: "center" }}>{n.icon}</span>
-              {n.label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="spacer" />
-        <div className="who">
-          <div style={{ fontWeight: 600 }}>{me.name || me.email}</div>
-          <div style={{ opacity: 0.75 }}>{me.role} · {me.tenant.name}</div>
-          <div className="row" style={{ marginTop: 6 }}>
-            <NavLink to="/profile" style={{ color: "#fff", opacity: 0.85 }}>Profile</NavLink>
-            <button className="small ghost" style={{ color: "#fff" }} onClick={logout}>Sign out</button>
-          </div>
-        </div>
-      </aside>
+    <div className={`shell ${collapsed ? "nav-collapsed" : ""}`}>
+      <Sidebar collapsed={collapsed} />
       <div className="main">
-        <TopBar />
+        <AppBar onToggleSidebar={toggle} />
         <main className="content">
           {!me.companies.length ? (
             <Routes>

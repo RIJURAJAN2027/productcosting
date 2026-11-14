@@ -27,8 +27,9 @@ export default function Login() {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={submit}>
+        <img src="/brand/logo-long.png" alt="L&T Valves" style={{ height: 40, alignSelf: "flex-start" }} />
         <div>
-          <h1>Product Costing & Profitability</h1>
+          <h1 style={{ color: "var(--brand)" }}>Product Costing & Profitability</h1>
           <p className="muted" style={{ margin: "6px 0 0" }}>Sign in to continue</p>
         </div>
         <label className="field">
