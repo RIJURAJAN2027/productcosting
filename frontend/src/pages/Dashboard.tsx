@@ -1,14 +1,13 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { useState } from "react";
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, LabelList, Line, LineChart, Pie, PieChart, ReferenceLine,
-  ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, qs } from "../api";
 import { useApp } from "../context";
 import { fmt, pct, UNIT_LABEL } from "../format";
-import type { Kpis } from "../types";
+import type { Kpis, Run } from "../types";
 import { Badge, ErrorBox, Loading } from "../components/ui";
-import { Icon, type IconName } from "../components/icons";
+import { Icon } from "../components/icons";
 
 interface DashboardData {
   unit: string;
@@ -26,106 +25,143 @@ interface DashboardData {
   };
 }
 
-function Tip({ active, payload, label, unit }: { active?: boolean; payload?: { name: string; value: number; color: string }[]; label?: string; unit: string }) {
-  if (!active || !payload?.length) return null;
+// unit written after an amount: ₹738.13 cr
+const UNIT_SHORT: Record<string, string> = { rupees: "", thousand: "'000", lakh: "lakh", million: "mn", crore: "cr" };
+const money = (v: number | null | undefined, unit: string, d = 2) =>
+  `${(v ?? 0) < 0 ? "−" : ""}₹${fmt(v == null ? v : Math.abs(v), d)}${UNIT_SHORT[unit] ? ` ${UNIT_SHORT[unit]}` : ""}`;
+/** small amounts (controls) keep enough decimals to stay visible */
+const smallMoney = (v: number, unit: string) => money(v, unit, Math.abs(v) < 0.01 ? 4 : 2);
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+function Amount({ v, unit, d = 2 }: { v?: number | null; unit: string; d?: number }) {
   return (
-    <div className="chart-tip">
-      <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
-      {payload.map((p) => (
-        <div key={p.name} className="row" style={{ gap: 6 }}>
-          <i style={{ width: 10, height: 10, background: p.color, borderRadius: 2, display: "inline-block" }} />
-          <span className="k">{p.name}</span>
-          <strong style={{ marginLeft: "auto" }}>{fmt(p.value)} </strong>
-        </div>
-      ))}
-      <div className="muted small">{UNIT_LABEL[unit]}</div>
-    </div>
+    <span className={`amount ${(v ?? 0) < 0 ? "neg" : ""}`}>
+      {(v ?? 0) < 0 ? "−" : ""}<span className="cur">₹</span>{fmt(v == null ? v : Math.abs(v), d)}{UNIT_SHORT[unit] ? <span className="unit">{UNIT_SHORT[unit]}</span> : null}
+    </span>
   );
 }
 
-const VIEWS = {
-  margin: { label: "Sales & margin", series: [
-    { key: "sales", label: "Sales", color: "#1f6fc5", id: "gSales" },
-    { key: "gross_margin", label: "Gross margin", color: "#f2a516", id: "gGm" },
-  ] },
-  profit: { label: "Profit", series: [
-    { key: "plant_profit", label: "Plant profit", color: "#7c5ce6", id: "gPp" },
-    { key: "pbt", label: "PBT", color: "#13a89e", id: "gPbt" },
-  ] },
-} as const;
-type View = keyof typeof VIEWS;
-
-const MIX_COLORS = ["#1f6fc5", "#7c5ce6", "#f2a516", "#13a89e", "#e8537a", "#5aa9f0", "#9aa5b8"];
-
-/** Small statistic with a coloured round icon (strip under the hero chart). */
-function MiniStat({ icon, tone, label, value, sub }: { icon: IconName; tone: string; label: string; value: string; sub?: string }) {
+/** Variance to budget, coloured by whether it is good news. */
+function Variance({ v, b, unit, higherIsBetter = true }: { v?: number; b?: number; unit: string; higherIsBetter?: boolean }) {
+  if (v === undefined || b === undefined) return null;
+  const diff = v - b;
+  const good = higherIsBetter ? diff >= 0 : diff <= 0;
   return (
-    <div className="mini-stat">
-      <span className={`dot-icon ${tone}`}><Icon name={icon} size={18} /></span>
-      <div>
-        <div className="label">{label}</div>
-        <div className="value">{value}</div>
-        {sub ? <div className="sub">{sub}</div> : null}
-      </div>
-    </div>
+    <span className={`variance ${good ? "good" : "bad"}`}>
+      {diff >= 0 ? "▲" : "▼"} {money(Math.abs(diff), unit)} vs budget
+    </span>
   );
 }
 
-/** Gradient stat card with a white sparkline drawn from the period trend. */
-function StatCard({ tone, title, value, sub, data, dataKey, kind = "line" }: {
-  tone: string; title: string; value: string; sub: React.ReactNode; data: Record<string, unknown>[]; dataKey: string; kind?: "line" | "bar";
+function KpiTile({ label, value, unit, sub, budget, higherIsBetter, to }: {
+  label: string; value?: number; unit: string; sub?: string; budget?: number; higherIsBetter?: boolean; to: string;
 }) {
   return (
-    <div className={`stat-card ${tone}`}>
-      <div className="stat-text">
-        <div className="title">{title}</div>
-        <div className="value">{value}</div>
-        <div className="sub">{sub}</div>
-      </div>
-      {data.length > 1 ? (
-        <div className="spark" aria-hidden>
-          <ResponsiveContainer width="100%" height={56}>
-            {kind === "bar" ? (
-              <BarChart data={data} margin={{ top: 4, right: 0, left: 0, bottom: 0 }} barCategoryGap="22%">
-                <Bar dataKey={dataKey} maxBarSize={16} fill="rgba(255,255,255,.75)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
-              </BarChart>
-            ) : (
-              <LineChart data={data} margin={{ top: 6, right: 4, left: 4, bottom: 6 }}>
-                <Line type="monotone" dataKey={dataKey} stroke="rgba(255,255,255,.9)" strokeWidth={2.2} strokeDasharray="5 4" dot={false} isAnimationActive={false} />
-              </LineChart>
-            )}
-          </ResponsiveContainer>
+    <Link to={to} className="kpi-tile">
+      <span className="label">{label}</span>
+      <span className="value"><Amount v={value} unit={unit} /></span>
+      <span className="sub">{sub ?? " "}</span>
+      <Variance v={value} b={budget} unit={unit} higherIsBetter={higherIsBetter} />
+    </Link>
+  );
+}
+
+// ---------------------------------------------------------------- profit bridge (Sales → PBT)
+type Step = { label: string; value: number; kind: "total" | "up" | "down" };
+const BRIDGE: { key: string; label: string; sign?: 1 | -1 }[] = [
+  { key: "sales", label: "Sales" },
+  { key: "material_cost", label: "Material cost", sign: -1 },
+  { key: "variable_cost", label: "Variable cost", sign: -1 },
+  { key: "gross_margin", label: "Gross margin" },
+  { key: "factory_overhead", label: "Factory overhead", sign: -1 },
+  { key: "pre_factory", label: "People cost – factory", sign: -1 },
+  { key: "plant_profit", label: "Plant profit" },
+  { key: "corporate_overheads", label: "Corporate overhead", sign: -1 },
+  { key: "pre_corporate", label: "People cost – corporate", sign: -1 },
+  { key: "other_credits", label: "Other income / (expense)", sign: 1 },
+  { key: "pbt", label: "Profit before tax" },
+];
+
+function bridgeSteps(c: Kpis): Step[] {
+  const steps: Step[] = [];
+  let running: number | undefined;
+  let pending: Step[] = [];
+  for (const b of BRIDGE) {
+    const v = num(c[b.key]);
+    if (v === undefined) continue;
+    if (!b.sign) {
+      if (running !== undefined) {
+        const moved = pending.reduce((t, s) => t + (s.kind === "up" ? s.value : -s.value), 0);
+        const rest = v - running - moved;
+        if (Math.abs(rest) > 0.005) pending.push({ label: "Other items", value: Math.abs(rest), kind: rest >= 0 ? "up" : "down" });
+        steps.push(...pending);
+      }
+      pending = [];
+      steps.push({ label: b.label, value: v, kind: "total" });
+      running = v;
+    } else if (running !== undefined) {
+      const delta = v * b.sign;
+      pending.push({ label: b.label, value: Math.abs(delta), kind: delta >= 0 ? "up" : "down" });
+    }
+  }
+  return steps;
+}
+
+function ProfitBridge({ c, unit }: { c: Kpis; unit: string }) {
+  const steps = bridgeSteps(c);
+  // positions on a shared scale
+  let run = 0;
+  const bars = steps.map((s) => {
+    let from: number, to: number;
+    if (s.kind === "total") { from = 0; to = s.value; run = s.value; }
+    else if (s.kind === "down") { from = run - s.value; to = run; run -= s.value; }
+    else { from = run; to = run + s.value; run += s.value; }
+    return { ...s, lo: Math.min(from, to), hi: Math.max(from, to) };
+  });
+  const min = Math.min(0, ...bars.map((b) => b.lo));
+  const max = Math.max(...bars.map((b) => b.hi), 1e-9);
+  const pos = (x: number) => ((x - min) / (max - min)) * 100;
+  const sales = num(c.sales);
+  return (
+    <div className="bridge" role="table" aria-label="Profit bridge from sales to profit before tax">
+      {bars.map((b, i) => (
+        <div key={i} className={`bridge-row ${b.kind}`} role="row">
+          <span className="b-label" role="cell">{b.label}</span>
+          <span className="b-track" role="cell" aria-hidden>
+            {min < 0 ? <i className="zero" style={{ left: `${pos(0)}%` }} /> : null}
+            <i className="bar" style={{ left: `${pos(b.lo)}%`, width: `${Math.max(pos(b.hi) - pos(b.lo), 0.4)}%` }} />
+          </span>
+          <span className="b-value" role="cell">
+            {b.kind === "down" ? "−" : b.kind === "up" ? "+" : ""}{fmt(b.value)}
+            <small>{sales ? pct(b.value / sales) : ""}</small>
+          </span>
         </div>
-      ) : null}
+      ))}
+      <div className="bridge-foot muted small">{UNIT_LABEL[unit]} · % of sales</div>
     </div>
   );
 }
 
-function Activity({ icon, tone, title, text, when }: { icon: IconName; tone: string; title: React.ReactNode; text: React.ReactNode; when?: string }) {
-  return (
-    <li className="activity">
-      <span className="when">{when}</span>
-      <span className={`dot-icon ${tone}`}><Icon name={icon} size={16} /></span>
-      <div><div className="title">{title}</div><div className="text">{text}</div></div>
-    </li>
-  );
-}
-
-function pgStatus(p: Kpis): { label: string; cls: string } {
-  const pbt = p.pbt ?? 0;
-  if (pbt < 0) return { label: "Loss", cls: "loss" };
-  if ((p.pbt_pct ?? 0) < 0.05) return { label: "Thin margin", cls: "thin" };
-  return { label: "Profitable", cls: "profit" };
-}
+// ---------------------------------------------------------------- page
+type SortKey = "pbt" | "sales" | "pbt_pct" | "gross_margin_pct" | "material_cost_pct";
 
 export default function Dashboard() {
   const { companyId, periodId, unit, company } = useApp();
-  const [view, setView] = useState<View>("margin");
+  const [sort, setSort] = useState<SortKey>("pbt");
   const q = useQuery({
     queryKey: ["dashboard", companyId, periodId, unit],
     queryFn: () => api.get<DashboardData>(`/api/companies/${companyId}/dashboard${qs({ period_id: periodId, unit })}`),
     enabled: companyId !== null,
   });
+  const runId = q.data?.current?.run.id;
+  const runQ = useQuery({ queryKey: ["run", runId], queryFn: () => api.get<Run>(`/api/runs/${runId}`), enabled: !!runId });
+
+  const pgs = useMemo(() => {
+    const list = (q.data?.current?.product_groups ?? []).filter((p) => Math.abs(p.sales ?? 0) > 1e-9 || Math.abs(p.pbt ?? 0) > 1e-9);
+    return [...list].sort((a, b) => ((num(b[sort]) ?? -Infinity) - (num(a[sort]) ?? -Infinity)));
+  }, [q.data, sort]);
+
   if (q.error) return <ErrorBox error={q.error} />;
   if (!q.data) return <Loading />;
   const d = q.data;
@@ -133,224 +169,177 @@ export default function Dashboard() {
   if (!cur) {
     return (
       <div className="card empty">
-        No calculated period yet. <Link to="/periods">Upload trial balances</Link> and <Link to="/runs">run a calculation</Link>.
+        No calculated period yet. <Link to="/periods">Upload the trial balances</Link>, then <Link to="/runs">run a calculation</Link>.
       </div>
     );
   }
   const c = cur.company;
   const b = cur.budget;
-  const u = UNIT_LABEL[unit];
   const plants = cur.plants.filter((p) => Math.abs(p.sales ?? 0) > 1e-9 || Math.abs(p.pbt ?? 0) > 1e-9);
-  const pgs = cur.product_groups.filter((p) => Math.abs(p.sales ?? 0) > 1e-9).sort((a, b2) => (b2.pbt ?? 0) - (a.pbt ?? 0));
-  const series = VIEWS[view].series;
-
-  // Sales mix by plant: top five, the rest grouped.
-  const bySales = [...plants].filter((p) => (p.sales ?? 0) > 0).sort((a, b2) => (b2.sales ?? 0) - (a.sales ?? 0));
-  const totalSales = bySales.reduce((t, p) => t + (p.sales ?? 0), 0);
-  const mix = bySales.slice(0, 5).map((p) => ({ name: p.plant, value: p.sales ?? 0 }));
-  const rest = bySales.slice(5).reduce((t, p) => t + (p.sales ?? 0), 0);
-  if (rest > 0) mix.push({ name: "Others", value: rest });
-
-  const variance = (v?: number | null, bv?: number | null, higherIsBetter = true) => {
-    if (bv === undefined || bv === null || v === undefined || v === null) return <span>No budget for this period</span>;
-    const diff = v - bv;
-    const good = higherIsBetter ? diff >= 0 : diff <= 0;
-    return <span className="var-chip">{diff >= 0 ? "▲" : "▼"} {fmt(Math.abs(diff))} {good ? "better" : "worse"} than budget</span>;
-  };
+  const maxSales = Math.max(...plants.map((p) => p.sales ?? 0), 1e-9);
+  // a % of sales is only shown when sales are at least 0.1% of company sales; otherwise it is not meaningful
+  const material = Math.max(Math.abs(c.sales ?? 0) * 0.001, 0.005);
+  const ofSales = (v: number | null | undefined, sales: number | undefined) => (Math.abs(sales ?? 0) >= material ? pct(v) : "n/m");
+  const isLoss = (v: number | undefined) => (v ?? 0) < -0.005;
+  const maxPbtAbs = Math.max(...pgs.map((p) => Math.abs(p.pbt ?? 0)), 1e-9);
+  const issues = (runQ.data?.controls ?? []).filter((x) => x.level !== "ok").sort((a, b2) => (a.level === "error" ? -1 : 1) - (b2.level === "error" ? -1 : 1));
   const errors = cur.controls.errors ?? 0;
   const warnings = cur.controls.warnings ?? 0;
-  const loss = pgs.filter((p) => (p.pbt ?? 0) < 0).length;
+  const u = unit;
+  // control amounts are in the calculation unit (company setting), not the display unit
+  const calcUnit = Object.entries({ rupees: 1, thousand: 1e3, lakh: 1e5, million: 1e6, crore: 1e7 })
+    .find(([, v]) => v === company?.settings.calc_unit_divisor)?.[0] ?? "crore";
+  const head = (k: SortKey, label: string) => (
+    <th className="num">
+      <button className={`th-sort ${sort === k ? "on" : ""}`} onClick={() => setSort(k)} aria-sort={sort === k ? "descending" : "none"}>
+        {label}{sort === k ? " ↓" : ""}
+      </button>
+    </th>
+  );
 
   return (
     <>
       <div className="page-head">
         <div>
-          <div className="eyebrow">Overview</div>
           <h1>{company?.name}</h1>
-          <p>{cur.label} · run #{cur.run.id} <Badge status={cur.run.status} /></p>
+          <p className="head-meta">
+            <span>{cur.label}</span>
+            <span>Run #{cur.run.id} <Badge status={cur.run.status} /></span>
+            <span>{b ? "Compared with budget" : "No budget loaded"}</span>
+            <span>Amounts in {UNIT_LABEL[u]}</span>
+          </p>
         </div>
         <div className="row">
-          <Link className="btn" to={`/runs/${cur.run.id}`}><Icon name="calc" size={15} />Run details</Link>
-          <Link className="btn" to="/compare"><Icon name="compare" size={15} />Compare</Link>
-          <Link className="btn primary" to="/reports"><Icon name="reports" size={15} />Open reports</Link>
+          <Link className="btn" to={`/runs/${cur.run.id}`}>Run details</Link>
+          <Link className="btn primary" to="/reports"><Icon name="reports" size={15} />Open P&amp;L reports</Link>
         </div>
       </div>
 
-      <div className="dash-top">
-        <div className="card hero">
-          <div className="hero-body">
-            <div className="hero-figures">
-              <div>
-                <h3>Company performance</h3>
-                <div className="muted small">{cur.label} · {u}</div>
-              </div>
-              <div>
-                <div className="big">{fmt(c.sales)}</div>
-                <div className="muted small">Sales this period</div>
-              </div>
-              <div>
-                <div className={`big ${(c.pbt ?? 0) < 0 ? "neg" : ""}`}>{fmt(c.pbt)}</div>
-                <div className="muted small">Profit before tax · {pct(c.pbt_pct)} of sales</div>
-              </div>
-              <Link className="pill-btn" to="/reports">P&amp;L reports</Link>
-            </div>
-            <div className="hero-chart">
-              <div className="row hero-chart-head">
-                <div className="seg-text" role="tablist" aria-label="Chart view">
-                  {(Object.keys(VIEWS) as View[]).map((k) => (
-                    <button key={k} role="tab" aria-selected={view === k} className={view === k ? "active" : ""} onClick={() => setView(k)}>{VIEWS[k].label}</button>
-                  ))}
-                </div>
-                <div className="legend right">
-                  {series.map((s) => <span key={s.key}><i style={{ background: s.color, borderRadius: "50%" }} />{s.label}</span>)}
-                </div>
-              </div>
-              <ResponsiveContainer width="100%" height={240}>
-                <AreaChart data={d.trend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <defs>
-                    {series.map((s) => (
-                      <linearGradient key={s.id} id={s.id} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={s.color} stopOpacity={0.35} />
-                        <stop offset="100%" stopColor={s.color} stopOpacity={0.02} />
-                      </linearGradient>
-                    ))}
-                  </defs>
-                  <CartesianGrid stroke="var(--grid)" strokeDasharray="4 4" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fill: "var(--text-3)", fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: "var(--text-3)", fontSize: 12 }} axisLine={false} tickLine={false} width={60}
-                    tickFormatter={(v: number) => (v === 0 ? "0" : fmt(v, 0))} />
-                  <Tooltip content={<Tip unit={unit} />} cursor={{ stroke: "var(--border-strong)", strokeDasharray: "4 4" }} />
-                  {series.map((s) => (
-                    <Area key={s.key} type="monotone" dataKey={s.key} name={s.label} stroke={s.color} strokeWidth={2.5}
-                      fill={`url(#${s.id})`} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: "var(--surface)" }} isAnimationActive={false} />
-                  ))}
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
+      {errors || warnings ? (
+        <div className={`alert ${errors ? "error" : "warning"}`} role="alert">
+          <Icon name="alert" size={18} />
+          <div className="grow">
+            <strong>
+              {errors ? plural(errors, "control error") : ""}{errors && warnings ? " and " : ""}{warnings ? plural(warnings, "warning") : ""}
+              {errors ? " – check before submitting this run" : ""}
+            </strong>
+            {issues.length ? (
+              <ul>
+                {issues.slice(0, 4).map((x) => (
+                  <li key={x.code}><span className={`lvl ${x.level}`}>{x.level}</span>{x.title}
+                    {Math.abs(x.amount) > 1e-9 ? <span className="muted"> · {smallMoney(x.amount, calcUnit)}</span> : null}</li>
+                ))}
+              </ul>
+            ) : null}
           </div>
-          <div className="mini-stats">
-            <MiniStat icon="trend" tone="rose" label="Gross margin" value={fmt(c.gross_margin)} sub={`${pct(c.gross_margin_pct)} of sales`} />
-            <MiniStat icon="factory" tone="violet" label="Plant profit" value={fmt(c.plant_profit)} sub={`${pct(c.plant_profit_pct)} of sales`} />
-            <MiniStat icon="box" tone="amber" label="Material cost" value={fmt(c.material_cost)} sub={`MC ${pct(c.material_cost_pct)}`} />
-            <MiniStat icon="target" tone="sky" label="Break-even / month" value={c.bep_per_month !== undefined ? fmt(c.bep_per_month) : "–"} sub={u} />
-          </div>
+          <Link className="btn small" to={`/runs/${cur.run.id}`}>Review controls</Link>
         </div>
+      ) : null}
 
-        <div className="card mix">
-          <div className="card-head"><h2>Sales mix by plant</h2><span className="muted small">{u}</span></div>
-          <div className="donut">
-            <ResponsiveContainer width="100%" height={230}>
-              <PieChart>
-                <Pie data={mix} dataKey="value" nameKey="name" innerRadius="68%" outerRadius="96%" paddingAngle={1.5} stroke="none" startAngle={90} endAngle={-270} isAnimationActive={false}>
-                  {mix.map((m, i) => <Cell key={m.name} fill={MIX_COLORS[i % MIX_COLORS.length]} />)}
-                </Pie>
-                <Tooltip content={<Tip unit={unit} />} />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="donut-center"><Icon name="factory" size={26} /></div>
-          </div>
-          <div className="mix-legend">
-            {mix.map((m, i) => (
-              <div key={m.name}>
-                <div className="pct">{totalSales ? `${Math.round((m.value / totalSales) * 100)}%` : "–"}</div>
-                <div className="name"><i style={{ background: MIX_COLORS[i % MIX_COLORS.length] }} />{m.name}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
+      <section className="kpi-strip" aria-label="Key figures">
+        <KpiTile label="Sales" value={num(c.sales)} unit={u} budget={num(b?.sales)} to="/reports?tab=plant_wise" />
+        <KpiTile label="Material cost" value={num(c.material_cost)} unit={u} sub={`MC ${pct(c.material_cost_pct)} of sales`}
+          budget={num(b?.material_cost)} higherIsBetter={false} to="/reports?tab=mc" />
+        <KpiTile label="Gross margin" value={num(c.gross_margin)} unit={u} sub={`${pct(c.gross_margin_pct)} of sales`} budget={num(b?.gross_margin)} to="/reports?tab=plant_wise" />
+        <KpiTile label="Plant profit" value={num(c.plant_profit)} unit={u} sub={`${pct(c.plant_profit_pct)} of sales`} budget={num(b?.plant_profit)} to="/reports?tab=plant_wise" />
+        <KpiTile label="Profit before tax" value={num(c.pbt)} unit={u} sub={`${pct(c.pbt_pct)} of sales`} budget={num(b?.pbt)} to="/reports?tab=plant_wise" />
+        {num(c.bep_per_month) !== undefined ? <KpiTile label="Break-even sales" value={num(c.bep_per_month)} unit={u} sub="per month" to="/reports?tab=summary" /> : null}
+      </section>
 
-      <div className="stat-cards">
-        <StatCard tone="navy" title="Sales" value={fmt(c.sales)} sub={variance(c.sales, b?.sales)} data={d.trend} dataKey="sales" />
-        <StatCard tone="violet" title="Gross margin %" value={pct(c.gross_margin_pct) || "–"} sub={variance(c.gross_margin, b?.gross_margin)} data={d.trend} dataKey="gross_margin_pct" />
-        <StatCard tone="teal" title="PBT %" value={pct(c.pbt_pct) || "–"} sub={variance(c.pbt, b?.pbt)} data={d.trend} dataKey="pbt_pct" kind="bar" />
-        <StatCard tone="amber" title="Material cost %" value={pct(c.material_cost_pct) || "–"} sub={variance(c.material_cost, b?.material_cost, false)} data={d.trend} dataKey="material_cost_pct" kind="bar" />
-      </div>
-
-      <div className="dash-bottom">
-        <div className="card">
-          <div className="card-head"><h2>Calculation &amp; controls</h2><Link className="small" to={`/runs/${cur.run.id}`}>Details</Link></div>
-          <ul className="activities">
-            <Activity icon="calc" tone="sky" when={cur.label} title={<>Run #{cur.run.id} <Badge status={cur.run.status} /></>} text="Latest calculation for the selected period" />
-            <Activity icon={errors ? "alert" : "check"} tone={errors ? "rose" : warnings ? "amber" : "teal"} when="Controls"
-              title={errors ? `${errors} control error(s)` : warnings ? `${warnings} warning(s)` : "All controls passed"}
-              text={errors || warnings ? <Link to={`/runs/${cur.run.id}`}>Review the controls</Link> : "Every rupee is accounted for"} />
-            <Activity icon="layers" tone="violet" when="Periods" title={`${d.trend.length} calculated period(s)`}
-              text={d.trend.length ? `${d.trend[0].label} – ${d.trend[d.trend.length - 1].label}` : ""} />
-            <Activity icon="target" tone="amber" when="Budget" title={b ? "Budget available" : "No budget loaded"}
-              text={b ? <Link to="/compare">Compare actual with budget</Link> : <Link to="/periods">Add a budget period</Link>} />
-            <Activity icon="box" tone={loss ? "rose" : "teal"} when="Products" title={`${pgs.length} product group(s)`}
-              text={loss ? `${loss} making a loss` : "None making a loss"} />
-          </ul>
-        </div>
-
-        <div className="card flush">
-          <div className="card-head" style={{ padding: "16px 18px 4px" }}>
-            <div><h2>Product-group profitability</h2><div className="muted small">{cur.label} · {u}</div></div>
-            <Link className="btn small" to="/reports">Full report</Link>
-          </div>
-          <div className="table-wrap" style={{ maxHeight: 440 }}>
-            <table className="data pretty">
-              <thead>
-                <tr><th>Product group</th><th className="num">Sales</th><th className="num">MC %</th><th className="num">GM %</th><th className="num">PBT</th><th className="num">PBT %</th><th>Status</th></tr>
-              </thead>
-              <tbody>
-                {pgs.map((p) => {
-                  const st = pgStatus(p);
-                  return (
-                    <tr key={p.pg}>
-                      <td><strong>{p.pg}</strong></td>
-                      <td className="num">{fmt(p.sales)}</td>
-                      <td className="num">{pct(p.material_cost_pct)}</td>
-                      <td className="num">{pct(p.gross_margin_pct)}</td>
-                      <td className={`num ${(p.pbt ?? 0) < 0 ? "neg" : ""}`}>{fmt(p.pbt)}</td>
-                      <td className="num">{pct(p.pbt_pct)}</td>
-                      <td><span className={`status-pill ${st.cls}`}>{st.label}</span></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid cols-2">
+      <div className="dash-grid">
         <div className="card">
           <div className="card-head">
-            <h2>Sales and PBT by plant</h2>
+            <div><h2>Profit bridge</h2><div className="muted small">How sales turn into profit before tax · company</div></div>
+          </div>
+          <ProfitBridge c={c} unit={u} />
+        </div>
+
+        <div className="card">
+          <div className="card-head">
+            <div><h2>Plants</h2><div className="muted small">Sales and profit before tax</div></div>
+            <Link className="small" to="/reports?tab=plant_wise">Plant-wise P&amp;L</Link>
+          </div>
+          <div className="plant-list">
+            {plants.map((p) => (
+              <Link key={p.plant} to="/reports?tab=pg_wise" className="plant-row">
+                <span className="code">{p.plant}</span>
+                <span className="track" aria-hidden><i style={{ width: `${Math.max(((p.sales ?? 0) / maxSales) * 100, 0)}%` }} /></span>
+                <span className="vals">
+                  <span>{fmt(p.sales)} <small>sales</small></span>
+                  <span className={isLoss(p.pbt) ? "neg" : ""}>{fmt(p.pbt)} <small>PBT · {ofSales(p.pbt_pct, p.sales)}</small></span>
+                </span>
+              </Link>
+            ))}
+            {!plants.length ? <div className="muted">No plant has sales in this period.</div> : null}
+            <div className="muted small">{UNIT_LABEL[u]} · plants without sales or profit are hidden</div>
+          </div>
+        </div>
+      </div>
+
+      {d.trend.length >= 2 ? (
+        <div className="card">
+          <div className="card-head">
+            <div><h2>Trend</h2><div className="muted small">Calculated periods · {UNIT_LABEL[u]}</div></div>
             <div className="legend">
-              <span><i style={{ background: "#1f6fc5" }} />Sales</span>
-              <span><i style={{ background: "#f2a516" }} />PBT</span>
+              <span><i style={{ background: "var(--series-1)" }} />Sales</span>
+              <span><i style={{ background: "var(--series-2)" }} />Gross margin</span>
+              <span><i style={{ background: "var(--series-3)" }} />Profit before tax</span>
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={plants} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barGap={3} barCategoryGap="28%">
-              <CartesianGrid stroke="var(--grid)" strokeDasharray="4 4" vertical={false} />
-              <XAxis dataKey="plant" tick={{ fill: "var(--text-3)", fontSize: 12 }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fill: "var(--text-3)", fontSize: 12 }} axisLine={false} tickLine={false} width={60} tickFormatter={(v: number) => (v === 0 ? "0" : fmt(v, 0))} />
-              <Tooltip content={<Tip unit={unit} />} cursor={{ fill: "var(--surface-3)" }} />
-              <ReferenceLine y={0} stroke="var(--border-strong)" />
-              <Bar dataKey="sales" name="Sales" fill="#1f6fc5" radius={[6, 6, 0, 0]} isAnimationActive={false} />
-              <Bar dataKey="pbt" name="PBT" fill="#f2a516" radius={[6, 6, 0, 0]} isAnimationActive={false} />
-            </BarChart>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={d.trend} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke="var(--grid)" vertical={false} />
+              <XAxis dataKey="label" tick={{ fill: "var(--text-2)", fontSize: 12 }} axisLine={{ stroke: "var(--border)" }} tickLine={false} />
+              <YAxis tick={{ fill: "var(--text-2)", fontSize: 12 }} axisLine={false} tickLine={false} width={60} tickFormatter={(v: number) => (v === 0 ? "0" : fmt(v, 0))} />
+              <Tooltip formatter={(v: number) => fmt(v)} contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)" }} />
+              <Line type="monotone" dataKey="sales" name="Sales" stroke="var(--series-1)" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+              <Line type="monotone" dataKey="gross_margin" name="Gross margin" stroke="var(--series-2)" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+              <Line type="monotone" dataKey="pbt" name="Profit before tax" stroke="var(--series-3)" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
+            </LineChart>
           </ResponsiveContainer>
         </div>
-        <div className="card">
-          <div className="card-head"><h2>PBT by product group</h2><span className="muted small">{u}</span></div>
-          <ResponsiveContainer width="100%" height={Math.max(260, pgs.length * 30)}>
-            <BarChart data={pgs} layout="vertical" margin={{ top: 4, right: 48, left: 8, bottom: 0 }}>
-              <CartesianGrid stroke="var(--grid)" strokeDasharray="4 4" horizontal={false} />
-              <XAxis type="number" tick={{ fill: "var(--text-3)", fontSize: 12 }} tickFormatter={(v: number) => (v === 0 ? "0" : fmt(v, 0))} axisLine={false} tickLine={false} />
-              <YAxis type="category" dataKey="pg" tick={{ fill: "var(--text-2)", fontSize: 12 }} width={70} axisLine={false} tickLine={false} />
-              <Tooltip content={<Tip unit={unit} />} cursor={{ fill: "var(--surface-3)" }} />
-              <ReferenceLine x={0} stroke="var(--border-strong)" />
-              <Bar dataKey="pbt" name="PBT" radius={6} isAnimationActive={false}>
-                {pgs.map((p) => <Cell key={p.pg} fill={(p.pbt ?? 0) < 0 ? "#e8537a" : "#7c5ce6"} />)}
-                <LabelList dataKey="pbt" position="right" formatter={(v: number) => fmt(v, 1)} style={{ fill: "var(--text-2)", fontSize: 11 }} />
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
+      ) : null}
+
+      <div className="card flush">
+        <div className="card-head" style={{ padding: "16px 18px 6px" }}>
+          <div><h2>Product groups</h2><div className="muted small">All plants · {UNIT_LABEL[u]} · click a column to sort · losses and margins under 5% are flagged · n/m = not meaningful (no sales)</div></div>
+          <Link className="small" to="/reports?tab=all_pg">All-PG report</Link>
+        </div>
+        <div className="table-wrap">
+          <table className="data pg-table">
+            <thead>
+              <tr>
+                <th>Product group</th>
+                {head("sales", "Sales")}
+                {head("material_cost_pct", "MC %")}
+                {head("gross_margin_pct", "GM %")}
+                {head("pbt", "PBT")}
+                {head("pbt_pct", "PBT %")}
+                <th className="bar-col" aria-label="PBT compared" />
+              </tr>
+            </thead>
+            <tbody>
+              {pgs.map((p) => {
+                const pbt = p.pbt ?? 0;
+                const meaningful = Math.abs(p.sales ?? 0) >= material;
+                const flag = isLoss(pbt) ? "Loss" : meaningful && (p.pbt_pct ?? 0) < 0.05 ? "Thin margin" : !meaningful ? "No sales" : "";
+                const w = (Math.abs(pbt) / maxPbtAbs) * 50;
+                return (
+                  <tr key={p.pg} className={isLoss(pbt) ? "loss" : ""}>
+                    <td><strong>{p.pg}</strong>{flag ? <span className={`flag ${isLoss(pbt) ? "bad" : flag === "No sales" ? "info" : "warn"}`}>{flag}</span> : null}</td>
+                    <td className="num">{fmt(p.sales)}</td>
+                    <td className="num">{ofSales(p.material_cost_pct, p.sales)}</td>
+                    <td className="num">{ofSales(p.gross_margin_pct, p.sales)}</td>
+                    <td className={`num ${isLoss(pbt) ? "neg" : ""}`}>{fmt(p.pbt)}</td>
+                    <td className="num">{ofSales(p.pbt_pct, p.sales)}</td>
+                    <td className="bar-col" aria-hidden>
+                      <span className="pbt-bar"><i className={pbt < 0 ? "neg" : ""} style={pbt < 0 ? { right: "50%", width: `${w}%` } : { left: "50%", width: `${w}%` }} /></span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
     </>

@@ -81,16 +81,17 @@ function UserMenu() {
   );
 }
 
-function AppBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
+function AppBar() {
   const { me, can } = useAuth();
   const app = useApp();
   const next = THEMES[(THEMES.findIndex((t) => t.v === app.theme) + 1) % THEMES.length];
   const cur = THEMES.find((t) => t.v === app.theme) ?? THEMES[0];
   const hasCompany = !!me?.companies.length;
+  const items = NAV.filter((n) => !n.perm || can(n.perm));
+  const groups = [...new Set(items.map((n) => n.group))];
   return (
     <header className="appbar">
       <div className="appbar-top">
-        <button className="icon-btn" onClick={onToggleSidebar} aria-label="Toggle navigation"><Icon name="menu" /></button>
         <Link to="/" className="brand-long" aria-label="Home">
           <img src="/brand/logo-long.png" alt="L&T Valves" />
         </Link>
@@ -133,10 +134,15 @@ function AppBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       </div>
       {hasCompany ? (
         <nav className="modulebar" aria-label="Features">
-          {NAV.filter((n) => !n.perm || can(n.perm)).map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.to === "/"} className="module">
-              <Icon name={n.icon} size={16} />{n.short}
-            </NavLink>
+          {groups.map((g, gi) => (
+            <div key={g} className="module-group" role="group" aria-label={g}>
+              {gi > 0 ? <span className="module-sep" aria-hidden /> : null}
+              {items.filter((n) => n.group === g).map((n) => (
+                <NavLink key={n.to} to={n.to} end={n.to === "/"} className="module" title={n.label}>
+                  <Icon name={n.icon} size={16} />{n.short}
+                </NavLink>
+              ))}
+            </div>
           ))}
           <span className="grow" />
           {can("edit") ? (<>
@@ -150,54 +156,14 @@ function AppBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   );
 }
 
-function Sidebar({ collapsed }: { collapsed: boolean }) {
-  const { me, can } = useAuth();
-  const items = NAV.filter((n) => !n.perm || can(n.perm));
-  const groups = [...new Set(items.map((n) => n.group))];
-  return (
-    <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
-      <Link to="/" className="brand">
-        <img src="/brand/logo-short.png" alt="L&T" />
-        <div className="brand-text">Product Costing<small>& Profitability</small></div>
-      </Link>
-      <nav className="nav">
-        {me?.companies.length ? groups.map((g) => (
-          <div key={g}>
-            <div className="section">{g}</div>
-            {items.filter((n) => n.group === g).map((n) => (
-              <NavLink key={n.to} to={n.to} end={n.to === "/"} title={collapsed ? n.label : undefined}>
-                <Icon name={n.icon} />
-                <span className="label">{n.label}</span>
-              </NavLink>
-            ))}
-          </div>
-        )) : null}
-      </nav>
-      <div className="spacer" />
-      <div className="sidebar-foot">
-        <div className="tenant">{me?.tenant.name}</div>
-        <div className="muted small">Product costing v1</div>
-      </div>
-    </aside>
-  );
-}
-
 export default function App() {
   const { me, loading, can } = useAuth();
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("pc_nav_collapsed") === "1");
-  const toggle = () => {
-    setCollapsed((c) => {
-      try { localStorage.setItem("pc_nav_collapsed", c ? "0" : "1"); } catch { /* storage blocked */ }
-      return !c;
-    });
-  };
   if (loading) return <Loading what="Starting" />;
   if (!me) return <Login />;
   return (
-    <div className={`shell ${collapsed ? "nav-collapsed" : ""}`}>
-      <Sidebar collapsed={collapsed} />
+    <div className="shell">
       <div className="main">
-        <AppBar onToggleSidebar={toggle} />
+        <AppBar />
         <main className="content">
           {!me.companies.length ? (
             <Routes>

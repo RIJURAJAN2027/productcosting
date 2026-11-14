@@ -285,7 +285,6 @@ export default function MasterSheet() {
     <>
       <div className="page-head">
         <div>
-          <div className="eyebrow">Inputs</div>
           <h1>Master dashboard</h1>
           <p>
             Business areas, GL accounts and cost centres in the workbook's Masters layout. Edit here or upload the same
@@ -303,7 +302,7 @@ export default function MasterSheet() {
 
       <div className="card apply-bar">
         <div className="row" style={{ gap: 12 }}>
-          <span className="dot-icon sky" style={{ width: 34, height: 34 }}><Icon name="target" size={16} /></span>
+          <span className="apply-icon"><Icon name="target" size={18} /></span>
           <div>
             <div style={{ fontWeight: 650 }}>Changes apply from</div>
             <div className="muted small">The sheet shows the master valid then; edits and uploads start on that date.</div>
