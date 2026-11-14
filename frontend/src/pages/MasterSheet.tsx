@@ -35,6 +35,7 @@ interface Pending { code: string; description?: string; amount: number; source: 
 interface SectionResult { added: string[]; changed: { code: string; before: Record<string, unknown>; after: Record<string, unknown> }[];
   removed: string[]; unchanged: number; not_in_file?: number; file_rows?: number }
 interface ImportResult { filename: string; sheet: string; header_row: number; warnings: string[]; unknown?: string[];
+  setup?: { plants: string[]; product_groups: string[] }; missing_functions?: string[];
   sections: Partial<Record<Sec, SectionResult>>; dry_run: boolean }
 
 // exact header text of the workbook's Masters sheet
@@ -477,13 +478,15 @@ function UploadDialog({ companyId, on, applyLabel, onClose, onDone }: {
   const toast = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [removeMissing, setRemoveMissing] = useState(false);
+  const [createSetup, setCreateSetup] = useState(false);
   const [preview, setPreview] = useState<ImportResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const run = async (f: File, dry: boolean, remove = removeMissing) => {
+  const run = async (f: File, dry: boolean, remove = removeMissing, setup = createSetup) => {
     setBusy(true);
     try {
       const r = await api.upload<ImportResult>(`/api/companies/${companyId}/master-sheet/import`, {
-        file: f, effective_from: on, remove_missing: remove ? "true" : "false", dry_run: dry ? "true" : "false" });
+        file: f, effective_from: on, remove_missing: remove ? "true" : "false", dry_run: dry ? "true" : "false",
+        create_setup: setup ? "true" : "false" });
       if (dry) setPreview(r);
       else {
         const n = Object.values(r.sections).reduce((t, s) => t + (s?.added.length ?? 0) + (s?.changed.length ?? 0) + (s?.removed.length ?? 0), 0);
@@ -497,7 +500,8 @@ function UploadDialog({ companyId, on, applyLabel, onClose, onDone }: {
       setBusy(false);
     }
   };
-  const changes = preview ? Object.values(preview.sections).reduce((t, s) => t + (s?.added.length ?? 0) + (s?.changed.length ?? 0) + (s?.removed.length ?? 0), 0) : 0;
+  const changes = preview ? Object.values(preview.sections).reduce((t, s) => t + (s?.added.length ?? 0) + (s?.changed.length ?? 0) + (s?.removed.length ?? 0), 0)
+    + (preview.setup ? preview.setup.plants.length + preview.setup.product_groups.length : 0) : 0;
   return (
     <Modal title="Upload master sheet" onClose={onClose} wide footer={preview ? (<>
       <button onClick={() => { setPreview(null); setFile(null); }}>Choose another file</button>
@@ -513,6 +517,9 @@ function UploadDialog({ companyId, on, applyLabel, onClose, onDone }: {
       <label className="row small"><input type="checkbox" checked={removeMissing}
         onChange={(e) => { setRemoveMissing(e.target.checked); if (file) run(file, true, e.target.checked); }} />
         Also remove codes that are not in the file (use only with a complete master)</label>
+      <label className="row small"><input type="checkbox" checked={createSetup}
+        onChange={(e) => { setCreateSetup(e.target.checked); if (file) run(file, true, removeMissing, e.target.checked); }} />
+        Also create the plants and product groups the business areas name (for a new company)</label>
       {!preview ? (
         <FileDrop accept=".xlsx,.xlsm" busy={busy} label="Drop the master Excel here or click to choose"
           onFile={(f) => { setFile(f); run(f, true); }} />
@@ -520,6 +527,16 @@ function UploadDialog({ companyId, on, applyLabel, onClose, onDone }: {
         <div className="stack">
           <div className="muted small">{preview.filename} · sheet “{preview.sheet}”, headers on row {preview.header_row} · preview – nothing is saved yet</div>
           {preview.warnings.map((w) => <div key={w} className="badge warning" style={{ whiteSpace: "normal" }}>{w}</div>)}
+          {preview.setup && (preview.setup.plants.length || preview.setup.product_groups.length) ? (
+            <div className="badge ok" style={{ whiteSpace: "normal" }}>
+              Creates {preview.setup.plants.length} plant(s): {preview.setup.plants.join(", ") || "none"} · {preview.setup.product_groups.length} product
+              group(s): {preview.setup.product_groups.join(", ") || "none"}
+            </div>
+          ) : null}
+          {preview.missing_functions?.length ? (
+            <div className="small muted">Allocation-logic values that are not a product group, COM or COR – set them up as PRE functions
+              on the Masters page: <strong>{preview.missing_functions.join(", ")}</strong></div>
+          ) : null}
           <table className="data">
             <thead><tr><th>List</th><th className="num">Rows in file</th><th className="num">New</th><th className="num">Changed</th>
               <th className="num">Unchanged</th><th className="num">{removeMissing ? "Removed" : "Not in file (kept)"}</th></tr></thead>

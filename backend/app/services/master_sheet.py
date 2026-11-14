@@ -127,14 +127,25 @@ def _plant_lookup(db: Session, company: Company, on: dt.date | None) -> tuple[di
     return exact, prefix
 
 
-def _derive(section: str, vals: dict, ctx: dict) -> None:
-    """Fields the engine needs that the sheet does not show: GL type and cost-centre plant."""
+def _derive(section: str, vals: dict, ctx: dict, existing=None) -> None:
+    """Fields the engine needs that the sheet does not show: GL type and cost-centre plant.
+
+    GL type: ``Excluded`` excludes the GL.  An existing GL otherwise keeps its PRE / Non-PRE type (a
+    category alone cannot tell them apart: "Others" is both an MC grouping and a PRE category).  A new
+    GL takes the type most GLs with the same category have, else PRE when the category is a PRE
+    category, else Non-PRE."""
     if section == "gl" and "category" in vals:
         cat = vals["category"]
         if cat and norm(cat) in (norm(EXCLUDED_LABEL), "exclude", "excl"):
             vals["category"], vals["gl_type"] = None, "EXCLUDED"
+        elif existing is not None and existing.gl_type in ("PRE", "NONPRE"):
+            pass
         elif cat:
-            vals["gl_type"] = "PRE" if norm(cat) in ctx["pre_categories"] else "NONPRE"
+            votes = ctx["cat_types"].get(norm(cat), {})
+            if votes:
+                vals["gl_type"] = max(votes, key=votes.get)
+            else:
+                vals["gl_type"] = "PRE" if norm(cat) in ctx["pre_categories"] else "NONPRE"
         else:
             vals["gl_type"] = "NONPRE"      # still to be mapped: shows as "needs mapping"
     if section == "cc" and "business_area" in vals:
@@ -148,7 +159,13 @@ def _derive(section: str, vals: dict, ctx: dict) -> None:
 
 def _context(db: Session, company: Company, on: dt.date | None) -> dict:
     exact, prefix = _plant_lookup(db, company, on)
-    return {"pre_categories": _pre_categories(company), "ba_plant": exact, "ba_prefix": prefix}
+    cat_types: dict[str, dict[str, int]] = {}
+    for g in current_rows(db, company, "gl", on).values():
+        if g.category and g.gl_type in ("PRE", "NONPRE"):
+            t = cat_types.setdefault(norm(g.category), {})
+            t[g.gl_type] = t.get(g.gl_type, 0) + 1
+    return {"pre_categories": _pre_categories(company), "ba_plant": exact, "ba_prefix": prefix,
+            "cat_types": cat_types}
 
 
 # ------------------------------------------------------------------------------------------- read
@@ -229,6 +246,7 @@ def apply_changes(db: Session, company: Company, user: User | None, section: str
     ctx = _context(db, company, effective_from)
     start = effective_from or DEFAULT_FROM
     added, changed, removed, unchanged = [], [], [], 0
+    new_pre: list[str] = []
     seen: set[str] = set()
 
     def new_version(obj, vals: dict) -> None:
@@ -256,8 +274,10 @@ def apply_changes(db: Session, company: Company, user: User | None, section: str
         obj = cur.get(code)
         if section == "gl" and "category" in vals and obj is not None and vals["category"] == _gl_category_out(obj):
             vals.pop("category")          # unchanged – keep the stored GL type as it is
-        _derive(section, vals, ctx)
+        _derive(section, vals, ctx, obj)
         if obj is None:
+            if section == "gl" and vals.get("gl_type") == "PRE":
+                new_pre.append(f"{code} ({vals.get('category')})")
             if section == "gl":
                 vals.setdefault("gl_type", "NONPRE")
                 vals.setdefault("description", "")
@@ -308,6 +328,7 @@ def apply_changes(db: Session, company: Company, user: User | None, section: str
             changed.append({"code": f"{len(moved)} cost centre(s)", "before": {}, "after": {"plant_code": "re-derived"}})
 
     result = {"section": section, "added": added, "changed": changed, "removed": removed, "unchanged": unchanged,
+              "new_pre": new_pre,
               "effective_from": effective_from.isoformat() if effective_from else None}
     if added or changed or removed:
         audit.log(db, user, f"master_sheet_{source}", "master_sheet", section, company.id,
@@ -448,13 +469,42 @@ def parse_xlsx(data: bytes) -> ParsedSheet:
                              "Cost centre, BArea and Allocation logic.")
 
 
+def add_setup(db: Session, company: Company, rows: list[dict], effective_from: dt.date | None) -> dict:
+    """Create the reporting plants and product groups the business-area list names but Masters lacks."""
+    s = company_settings(company)
+    on = effective_from
+    plants = {p.code for p in db.scalars(active(Plant, company.id, on))}
+    pgs = {p.code for p in db.scalars(active(ProductGroup, company.id, on))}
+    start = effective_from or DEFAULT_FROM
+    new_plants, new_pgs = [], {}
+    for r in rows:
+        p = _clean("plant_code", r.get("plant_code"))
+        g = _clean("pg_code", r.get("pg_code"))
+        if p and p not in plants and p not in new_plants:
+            new_plants.append(p)
+        if g and g not in pgs and g not in (s["com_code"], s["cor_code"]) and g not in new_pgs:
+            new_pgs[g] = _clean("family", r.get("family"))
+    n0 = len(plants)
+    for i, p in enumerate(new_plants):
+        db.add(Plant(company_id=company.id, code=p, name=p, sort_order=n0 + i, effective_from=start))
+    n0 = len(pgs)
+    for i, (g, fam) in enumerate(new_pgs.items()):
+        db.add(ProductGroup(company_id=company.id, code=g, name=g, family=fam, sort_order=n0 + i,
+                            effective_from=start))
+    db.flush()
+    return {"plants": new_plants, "product_groups": list(new_pgs)}
+
+
 def preview_or_import(db: Session, company: Company, user: User | None, data: bytes, filename: str,
-                      effective_from: dt.date | None, remove_missing: bool, dry_run: bool) -> dict:
+                      effective_from: dt.date | None, remove_missing: bool, dry_run: bool,
+                      create_setup: bool = False) -> dict:
     parsed = parse_xlsx(data)
     result: dict[str, Any] = {"filename": filename, "sheet": parsed.sheet, "header_row": parsed.header_row,
                               "columns": parsed.columns, "warnings": list(parsed.warnings), "sections": {},
                               "dry_run": dry_run, "effective_from": effective_from.isoformat() if effective_from
                               else None}
+    if create_setup and parsed.rows["ba"]:
+        result["setup"] = add_setup(db, company, parsed.rows["ba"], effective_from)
     opts = options(db, company, effective_from)
     for sec in SECTIONS:
         if sec not in parsed.columns:
@@ -481,6 +531,14 @@ def preview_or_import(db: Session, company: Company, user: User | None, data: by
         if f and f not in opts["allocation"]:
             unknown.append(f"Cost centre {r['code']}: allocation logic {f} is not a product group, COM, COR or "
                            "PRE function")
+    new_pre = result["sections"].get("gl", {}).get("new_pre") or []
+    if new_pre:
+        result["warnings"].append(f"{len(new_pre)} new GL(s) were set as PRE because of their category: "
+                                  f"{', '.join(new_pre[:10])}{' …' if len(new_pre) > 10 else ''}. Change the type on "
+                                  "the Masters page if they are not people-related costs.")
+    missing_fn = sorted({u.split("allocation logic ")[1].split(" is")[0] for u in unknown if "allocation logic" in u})
+    if missing_fn:
+        result["missing_functions"] = missing_fn
     if unknown:
         result["warnings"].append(f"{len(unknown)} value(s) are not set up in Masters (plants, product groups or "
                                   "PRE functions) – add them there or the calculation reports them.")

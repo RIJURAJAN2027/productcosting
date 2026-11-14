@@ -55,12 +55,14 @@ def save_changes(body: SheetChanges, company: Company = Depends(get_company), us
 @router.post("/import")
 async def import_sheet(file: UploadFile = File(...), effective_from: str | None = Form(None),
                        remove_missing: bool = Form(False), dry_run: bool = Form(True),
+                       create_setup: bool = Form(False),
                        company: Company = Depends(get_company), user: User = Depends(require("edit")),
                        db: Session = Depends(get_db)):
-    """Upload the master sheet (full or add-ons only).  ``dry_run`` (default) previews the changes."""
+    """Upload the master sheet (full or add-ons only).  ``dry_run`` (default) previews the changes;
+    ``create_setup`` also creates the plants and product groups the business areas name."""
     data = await file.read()
     return ms.preview_or_import(db, company, user, data, file.filename or "master.xlsx",
-                                ms.effective_date(effective_from), remove_missing, dry_run)
+                                ms.effective_date(effective_from), remove_missing, dry_run, create_setup)
 
 
 @router.get("/export")

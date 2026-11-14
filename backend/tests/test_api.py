@@ -401,3 +401,25 @@ def test_master_sheet_pending_codes_from_tb(client, H, company_id):
                    headers=H["viewer"]).json()
     assert [b["code"] for b in p["ba"]] == ["QQQ_NEW"]
     assert [g["code"] for g in p["gl"]] == ["77777"] and p["gl"][0]["description"] == "Brand new expense"
+
+
+def test_master_sheet_gl_type_and_setup(client, H, company_id):
+    base = f"/api/companies/{company_id}/master-sheet"
+    sheet = client.get(base, headers=H["viewer"]).json()
+    pre = next(g for g in sheet["sections"]["gl"] if g["gl_type"] == "PRE")
+    nonpre = next(g for g in sheet["sections"]["gl"] if g["gl_type"] == "NONPRE" and g["category"])
+    rows = [["ZZ1_BA", "ZZP", "ZZPG", "Zeta", None, nonpre["code"], None, pre["category"], None,
+             "ZZ-CC", "Zeta cost centre", "ZZ1_BA", "Zeta", "NEWFN"],
+            [None] * 5 + [99001, "Cash discount", pre["category"], None, None, None, None, None, None]]
+    data = master_xlsx(MASTER_HEAD, rows)
+    r = client.post(f"{base}/import", headers=H["analyst"], files={"file": ("s.xlsx", data)},
+                    data={"dry_run": "false", "create_setup": "true"}).json()
+    assert r["setup"] == {"plants": ["ZZP"], "product_groups": ["ZZPG"]}
+    assert r["missing_functions"] == ["NEWFN"]
+    assert any("set as PRE" in w for w in r["warnings"])
+    after = {g["code"]: g for g in client.get(base, headers=H["viewer"]).json()["sections"]["gl"]}
+    assert after[nonpre["code"]]["gl_type"] == "NONPRE"      # existing GL keeps its type
+    assert after[nonpre["code"]]["category"] == pre["category"]
+    assert after["99001"]["gl_type"] == "PRE"                 # new GL follows the category's GLs
+    cc = {c["code"]: c for c in client.get(base, headers=H["viewer"]).json()["sections"]["cc"]}
+    assert cc["ZZ-CC"]["plant_code"] == "ZZP"
