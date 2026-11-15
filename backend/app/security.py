@@ -57,3 +57,20 @@ def valid_email(value: str) -> str:
     if not EMAIL_RE.match(value):
         raise ValueError("Enter a valid e-mail address")
     return value
+
+
+def allowed_domains(tenant_settings: dict | None) -> list[str]:
+    """Company e-mail domains allowed to sign in: the organisation's setting, else the server default."""
+    from .settings import get_settings
+    v = (tenant_settings or {}).get("allowed_email_domains")
+    if v is None:
+        v = get_settings().allowed_email_domains
+    if isinstance(v, str):
+        v = v.split(",")
+    return [d.strip().lower().lstrip("@") for d in v if d and d.strip()]
+
+
+def email_domain_ok(email: str, domains: list[str]) -> bool:
+    if not domains:
+        return True
+    return email.strip().lower().rsplit("@", 1)[-1] in domains

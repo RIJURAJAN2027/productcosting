@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, qs } from "../api";
 import { useApp, useAuth, useToast } from "../context";
 import { Badge, ErrorBox, Field, FileDrop, Loading, Modal, Tabs } from "../components/ui";
+import { Icon } from "../components/icons";
 
 type Kind = "plants" | "product-groups" | "business-areas" | "gl-accounts" | "cost-centres" | "categories"
   | "pre-functions" | "allocation-rules" | "pnl-lines";
@@ -345,7 +346,7 @@ export default function Masters() {
           <h1>Masters</h1>
         </div>
         <div className="row">
-          <button onClick={() => api.download(`/api/companies/${companyId}/masters-export`)}>⬇ Export to Excel</button>
+          <button onClick={() => api.download(`/api/companies/${companyId}/masters-export`)}><Icon name="download" size={15} />Export to Excel</button>
           {can("edit") ? <button onClick={() => { setResult(null); setImporting(true); }}>⇪ Import from Excel</button> : null}
         </div>
       </div>

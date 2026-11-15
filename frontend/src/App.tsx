@@ -26,7 +26,7 @@ type NavItem = { to: string; label: string; icon: IconName; group: string; perm?
 const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: "dashboard", group: "Main" },
   { to: "/master", label: "Master", icon: "sheet", group: "Main" },
-  { to: "/periods", label: "Trial balances", icon: "upload", group: "Main" },
+  { to: "/periods", label: "Trial balances", icon: "tb", group: "Main" },
   { to: "/adjustments", label: "Adjustments", icon: "adjust", group: "Main" },
   { to: "/runs", label: "Calculations", icon: "calc", group: "Costing" },
   { to: "/reports", label: "P&L reports", icon: "reports", group: "Analysis" },
@@ -175,7 +175,7 @@ function Header({ onMenu }: { onMenu: () => void }) {
     const hit = pages.find((p) => p.label.toLowerCase() === t) ?? pages.find((p) => p.label.toLowerCase().includes(t));
     if (hit) { nav(hit.to); setTerm(""); }
   };
-  const first = (me?.name || me?.email || "").split(/[\s@]/)[0];
+  const first = me?.name || (me?.email ?? "").split("@")[0];
   return (
     <header className="page-header">
       <button className="icon-btn menu-btn" onClick={onMenu} aria-label="Open menu"><Icon name="menu" /></button>

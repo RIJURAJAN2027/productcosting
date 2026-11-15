@@ -10,3 +10,4 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("PC_DATABASE_URL", "sqlite+pysqlite:///:memory:")
 os.environ.setdefault("PC_SECRET_KEY", "test-secret-key-for-unit-tests-only-0123456789")
 os.environ.setdefault("PC_ENV", "test")
+os.environ.setdefault("PC_ALLOWED_EMAIL_DOMAINS", "")   # tests use example domains; the domain rule has its own test

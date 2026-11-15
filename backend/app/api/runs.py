@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
+import zipfile
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -9,16 +11,18 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import audit
 from ..audit import row_dict
 from ..db import get_db
 from ..deps import ensure_open, get_company, get_current_user, get_period, get_run_for_user, require
 from ..models import AuditLog, CalcRun, Company, Period, User
-from ..services import exports, reports
+from ..services import exports, presentation, reports
 from ..services.config_builder import UNITS, company_settings
 from ..services.runs import execute_run, transition
 
 router = APIRouter(prefix="/api", tags=["runs & reports"])
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
 class RunIn(BaseModel):
@@ -173,11 +177,50 @@ def _full_pack(db: Session, run: CalcRun, unit: str | None, nf: str, dec: int) -
     return exports.report_workbook(reps, nf, dec, extra=extra)
 
 
+@router.get("/runs/{run_id}/export/presentation.pptx")
+def export_pptx(run_id: int, unit: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Management presentation (PPT formats layout), marked as final."""
+    run = _run(run_id, user, db)
+    company, period = db.get(Company, run.company_id), db.get(Period, run.period_id)
+    data = presentation.deck_pptx(presentation.build_deck(db, run, unit), presentation.settings_format(company))
+    return Response(data, media_type=PPTX, headers={
+        "Content-Disposition": f'attachment; filename="{_export_name(company, period, "presentation", "pptx")}"'})
+
+
+@router.get("/runs/{run_id}/export/all.zip")
+def export_all(run_id: int, unit: str | None = None, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Everything in one download: Excel pack, presentation (PowerPoint and PDF), plant-wise and all-PG PDFs."""
+    run = _run(run_id, user, db)
+    company, period = db.get(Company, run.company_id), db.get(Period, run.period_id)
+    s = company_settings(company)
+    nf, dec = s["number_format"], int(s["decimals"])
+    deck = presentation.build_deck(db, run, unit)
+    files = {
+        _export_name(company, period, "reports", "xlsx"): _full_pack(db, run, unit, nf, dec),
+        _export_name(company, period, "presentation", "pptx"): presentation.deck_pptx(deck, nf),
+        _export_name(company, period, "presentation", "pdf"): presentation.deck_pdf(deck, nf),
+        _export_name(company, period, "plant_wise", "pdf"): exports.report_pdf(reports.build_report(db, run, "plant_wise", unit=unit)),
+        _export_name(company, period, "all_pg", "pdf"): exports.report_pdf(reports.build_report(db, run, "all_pg", unit=unit)),
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in files.items():
+            z.writestr(name, data)
+    audit.log(db, user, "download_all", "run", run.id, company.id, files=list(files))
+    db.commit()
+    return Response(buf.getvalue(), media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{_export_name(company, period, "all_outputs", "zip")}"'})
+
+
 @router.get("/runs/{run_id}/export/{name}.pdf")
 def export_pdf(run_id: int, name: str, plant: str | None = None, pg: str | None = None, unit: str | None = None,
                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     run = _run(run_id, user, db)
     company, period = db.get(Company, run.company_id), db.get(Period, run.period_id)
+    if name == "presentation":
+        data = presentation.deck_pdf(presentation.build_deck(db, run, unit), presentation.settings_format(company))
+        return Response(data, media_type="application/pdf", headers={
+            "Content-Disposition": f'attachment; filename="{_export_name(company, period, name, "pdf")}"'})
     rep = reports.build_report(db, run, name, plant, pg, unit)
     return Response(exports.report_pdf(rep), media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{_export_name(company, period, name, "pdf")}"'})

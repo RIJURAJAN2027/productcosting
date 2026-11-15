@@ -55,6 +55,48 @@ function KpiCard({ label, value, unit, icon, change, against, foot, to }: {
   );
 }
 
+// ---------------------------------------------------------------- reports pack (presentation and downloads)
+function ReportsPack() {
+  const { companyId, periods, periodId, unit } = useApp();
+  const actual = periods;
+  const [pid, setPid] = useState<number | null>(periodId);
+  useEffect(() => { setPid(periodId); }, [periodId]);
+  const runs = useQuery({ queryKey: ["runs", companyId], queryFn: () => api.get<Run[]>(`/api/companies/${companyId}/runs`), enabled: companyId !== null });
+  const period = actual.find((p) => p.id === pid);
+  const run = (runs.data ?? []).find((r) => r.period_id === pid && r.status === "published")
+    ?? (runs.data ?? []).find((r) => r.period_id === pid && r.status !== "failed");
+  const [busy, setBusy] = useState<string | null>(null);
+  const get = async (what: string, path: string) => {
+    setBusy(what);
+    try { await api.download(path); } finally { setBusy(null); }
+  };
+  return (
+    <section className="r-card r-pack">
+      <div className="r-pack-info">
+        <span className="r-pack-icon"><Icon name="ppt" size={22} /></span>
+        <div className="r-pack-text">
+          <h2>Reports pack</h2>
+          <p>{run ? <>Run #{run.id}</> : "No calculation for this period yet"}
+            {period?.uploads.BA_TB ? <span className="r-file" title={period.uploads.BA_TB.filename}><Icon name="check" size={13} />Business-area TB</span> : null}
+            {period?.uploads.CC_TB ? <span className="r-file" title={period.uploads.CC_TB.filename}><Icon name="check" size={13} />Cost-centre TB</span> : null}</p>
+        </div>
+      </div>
+      <label className="r-select">
+        <Icon name="calc" size={15} />
+        <select value={pid ?? ""} onChange={(e) => setPid(Number(e.target.value))} aria-label="Period for the reports pack">
+          {actual.map((p) => <option key={p.id} value={p.id}>{p.label || p.code}{p.scenario !== "actual" ? ` (${p.scenario})` : ""}</option>)}
+        </select>
+      </label>
+      <div className="r-pack-actions">
+        <button disabled={!run || !!busy} onClick={() => get("ppt", `/api/runs/${run!.id}/export/presentation.pptx${qs({ unit })}`)}><Icon name="ppt" size={16} />{busy === "ppt" ? "Preparing…" : "PowerPoint"}</button>
+        <button disabled={!run || !!busy} onClick={() => get("pdf", `/api/runs/${run!.id}/export/presentation.pdf${qs({ unit })}`)}><Icon name="doc" size={16} />{busy === "pdf" ? "Preparing…" : "PDF"}</button>
+        <button disabled={!run || !!busy} onClick={() => get("xlsx", `/api/runs/${run!.id}/export/pack.xlsx${qs({ unit })}`)}><Icon name="tb" size={16} />{busy === "xlsx" ? "Preparing…" : "Excel"}</button>
+        <button className="primary" disabled={!run || !!busy} onClick={() => get("all", `/api/runs/${run!.id}/export/all.zip${qs({ unit })}`)}><Icon name="zip" size={16} />{busy === "all" ? "Preparing…" : "Download all"}</button>
+      </div>
+    </section>
+  );
+}
+
 // ---------------------------------------------------------------- chart tooltip
 function ChartTip({ active, payload, label, unit }: { active?: boolean; payload?: { name: string; value: number; color: string }[]; label?: string; unit: string }) {
   if (!active || !payload?.length) return null;
@@ -143,7 +185,7 @@ export default function Dashboard() {
 
   // cost structure: where each rupee of sales goes
   const STRUCT: { key: string; label: string; color: string }[] = [
-    { key: "material_cost", label: "Material", color: "#5b4fe9" },
+    { key: "material_cost", label: "Material", color: "#0b3d6e" },
     { key: "variable_cost", label: "Variable cost", color: "#1f8fff" },
     { key: "factory_overhead", label: "Factory overhead", color: "#13b56b" },
     { key: "pre_factory", label: "People – factory", color: "#f59e0b" },
@@ -185,6 +227,8 @@ export default function Dashboard() {
         <KpiCard label="Material cost" value={num(c.material_cost)} unit={unit} icon="box" change={ppChange("material_cost_pct", false)} against={against}
           foot={`MC ${pct(c.material_cost_pct)} of sales`} to="/reports?tab=mc" />
       </section>
+
+      <ReportsPack />
 
       <div className="r-grid">
         <section className="r-card r-chart">

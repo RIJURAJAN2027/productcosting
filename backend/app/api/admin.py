@@ -13,7 +13,7 @@ from .. import audit
 from ..db import get_db
 from ..deps import get_company, get_current_user, require
 from ..models import ROLES, Company, Tenant, User
-from ..security import hash_password, password_problems, valid_email
+from ..security import allowed_domains, email_domain_ok, hash_password, password_problems, valid_email
 from ..services.backup import export_company, restore_company
 from ..services.config_builder import DEFAULT_SETTINGS, UNITS, company_settings
 from ..services.demo import create_demo_company, seed_demo_runs
@@ -112,6 +112,11 @@ def create_user(body: UserIn, user: User = Depends(require("admin")), db: Sessio
     n = db.scalar(select(func.count(User.id)).where(User.tenant_id == t.id, User.is_active.is_(True)))
     if n >= t.license_max_users:
         raise HTTPException(402, f"Licence allows {t.license_max_users} active users.")
+    tenant = db.get(Tenant, user.tenant_id)
+    domains = allowed_domains(tenant.settings if tenant else None)
+    if not email_domain_ok(body.email, domains):
+        raise HTTPException(422, "Use a company e-mail address (" + ", ".join("@" + d for d in domains) + ").")
+    body.auth_provider = "local"                 # e-mail and password only
     if db.scalar(select(User).where(func.lower(User.email) == body.email.lower())):
         raise HTTPException(409, "A user with this email already exists")
     if body.auth_provider == "local":

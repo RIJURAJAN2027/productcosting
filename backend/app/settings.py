@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     bootstrap_tenant: str = "Default"
     bootstrap_admin_email: str = "admin@example.com"
     bootstrap_admin_password: str = DEV_ADMIN_PASSWORD
+    bootstrap_admin_name: str = "Costing Manager"
+    # sign-in is limited to company e-mail addresses (comma-separated domains; empty = any domain).
+    # Administrators can change the list under Administration -> Organisation.
+    allowed_email_domains: str = "lntvalves.com"
     load_demo_company: bool = True
     # migrate the database schema when the application starts (default: on serverless platforms,
     # where there is no start-up script; Docker runs `python -m app.cli init` instead)

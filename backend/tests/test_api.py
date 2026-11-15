@@ -443,3 +443,44 @@ def test_pg_wise_cor_column_is_after_allocation(client, H, company_id):
     rep = client.get(f"/api/runs/{rid}/reports/pg_wise", headers=H["viewer"]).json()
     i = next(n for n, c in enumerate(rep["columns"]) if c["code"] == "COR")
     assert all(abs(r["values"][i]) < 1e-12 for r in rep["rows"] if r["kind"] == "line")
+
+
+def test_company_email_and_admin_only_passwords(client, H):
+    t = client.get("/api/tenant", headers=H["admin"]).json()
+    settings = {**(t.get("settings") or {}), "allowed_email_domains": ["lntvalves.com"]}
+    assert client.patch("/api/tenant", headers=H["admin"], json={"settings": settings}).status_code == 200
+    try:
+        r = client.post("/api/users", headers=H["admin"], json={"email": "someone@gmail.com", "name": "X", "role": "viewer",
+                                                                 "password": PW})
+        assert r.status_code == 422 and "company e-mail" in r.json()["detail"]
+        r = client.post("/api/users", headers=H["admin"], json={"email": "planner@lntvalves.com", "name": "Planner",
+                                                                 "role": "viewer", "password": PW, "auth_provider": "oidc"})
+        assert r.status_code == 201
+        assert r.json()["auth_provider"] == "local" if "auth_provider" in r.json() else True
+        assert client.post("/api/auth/login", json={"email": "planner@lntvalves.com", "password": PW}).status_code == 200
+        # an existing user outside the company domain can no longer sign in
+        assert client.post("/api/auth/login", json={"email": "viewer@test.local", "password": PW}).status_code == 403
+    finally:
+        settings["allowed_email_domains"] = []
+        client.patch("/api/tenant", headers=H["admin"], json={"settings": settings})
+    # only administrators change passwords
+    r = client.post("/api/auth/change-password", headers=H["viewer"], json={"current_password": PW, "new_password": PW + "x"})
+    assert r.status_code == 403
+
+
+def test_presentation_and_download_all(client, H, company_id):
+    import zipfile as _zip
+    runs = client.get(f"/api/companies/{company_id}/runs", headers=H["viewer"]).json()
+    rid = next(r["id"] for r in runs if r["status"] != "failed")
+    r = client.get(f"/api/runs/{rid}/export/presentation.pptx", headers=H["viewer"])
+    assert r.status_code == 200 and r.content[:2] == b"PK"
+    z = _zip.ZipFile(io.BytesIO(r.content))
+    assert b"_MarkAsFinal" in z.read("docProps/custom.xml")             # opens read-only
+    assert sum(1 for n in z.namelist() if n.startswith("ppt/slides/slide")) >= 3
+    r = client.get(f"/api/runs/{rid}/export/presentation.pdf", headers=H["viewer"])
+    assert r.status_code == 200 and r.content[:4] == b"%PDF"
+    r = client.get(f"/api/runs/{rid}/export/all.zip", headers=H["viewer"])
+    assert r.status_code == 200
+    names = _zip.ZipFile(io.BytesIO(r.content)).namelist()
+    assert any(n.endswith("reports.xlsx") for n in names) and any(n.endswith("presentation.pptx") for n in names)
+    assert any(n.endswith("presentation.pdf") for n in names) and len(names) == 5

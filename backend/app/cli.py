@@ -186,6 +186,7 @@ def cmd_create_admin(args: argparse.Namespace) -> None:
     from .db import session_scope
     from .models import Tenant, User
     from .security import hash_password, password_problems
+    from .settings import get_settings
 
     pw = os.environ.get("PC_NEW_PASSWORD") or getpass.getpass("Password: ")
     problems = password_problems(pw)
@@ -197,9 +198,9 @@ def cmd_create_admin(args: argparse.Namespace) -> None:
             raise SystemExit("Run `python -m app.cli init` first.")
         if db.scalar(select(User).where(func.lower(User.email) == args.email.lower())):
             raise SystemExit(f"User {args.email} already exists; use set-password.")
-        db.add(User(tenant_id=tenant.id, email=args.email.lower(), name=args.name or "Administrator", role="admin",
+        db.add(User(tenant_id=tenant.id, email=args.email.lower(), name=args.name or get_settings().bootstrap_admin_name, role="admin",
                     password_hash=hash_password(pw)))
-    print(f"Administrator {args.email} created.")
+    print(f"Admin account {args.email} created.")
 
 
 def main(argv: list[str] | None = None) -> None:

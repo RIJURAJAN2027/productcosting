@@ -1,5 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { api } from "../api";
+import { useState, type FormEvent } from "react";
 import { useAuth } from "../context";
 
 export default function Login() {
@@ -8,10 +7,6 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [sso, setSso] = useState(false);
-  useEffect(() => {
-    api.get<{ enabled: boolean }>("/api/auth/sso/config").then((c) => setSso(c.enabled)).catch(() => {});
-  }, []);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -33,8 +28,8 @@ export default function Login() {
           <p className="muted" style={{ margin: "6px 0 0" }}>Sign in to continue</p>
         </div>
         <label className="field">
-          <span>E-mail</span>
-          <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+          <span>Company e-mail</span>
+          <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@lntvalves.com" required autoFocus />
         </label>
         <label className="field">
           <span>Password</span>
@@ -44,9 +39,7 @@ export default function Login() {
         <button className="primary" type="submit" disabled={busy} style={{ justifyContent: "center", padding: "9px 12px" }}>
           {busy ? "Signing in…" : "Sign in"}
         </button>
-        {sso ? (
-          <a className="btn" style={{ justifyContent: "center" }} href="/api/auth/sso/login">Sign in with your organisation (SSO)</a>
-        ) : null}
+        <p className="muted small" style={{ margin: 0, textAlign: "center" }}>Forgot your password? Contact your administrator.</p>
       </form>
     </div>
   );

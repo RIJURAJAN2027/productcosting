@@ -6,6 +6,7 @@ import { useApp, useAuth, useToast } from "../context";
 import { dateTime, UNIT_LABEL } from "../format";
 import type { Run } from "../types";
 import { Badge, ControlList, ErrorBox, Loading, Modal } from "../components/ui";
+import { Icon } from "../components/icons";
 
 const UNITS: Record<string, number> = { rupees: 1, thousand: 1e3, lakh: 1e5, million: 1e6, crore: 1e7 };
 
@@ -145,7 +146,7 @@ export default function Runs() {
           {period.status === "locked" ? <Badge status="locked">locked</Badge> : null}
           <input style={{ flex: 1, minWidth: 200 }} placeholder="Optional note (e.g. after MC adjustments)" value={note} onChange={(e) => setNote(e.target.value)} />
           <button className="primary" disabled={busy || period.status === "locked" || !period.uploads.BA_TB} onClick={calculate}>
-            {busy ? "Calculating…" : "▶ Run calculation"}
+            {busy ? "Calculating…" : <><Icon name="play" size={15} />Run calculation</>}
           </button>
           {!period.uploads.BA_TB ? <span className="muted small">Upload the business-area TB first.</span> : null}
         </div>

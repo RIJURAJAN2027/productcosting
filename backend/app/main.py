@@ -103,12 +103,15 @@ def init_db() -> None:
     with session_scope() as db:
         advisory_xact_lock(db, BOOTSTRAP_LOCK)       # only one process creates the first admin
         if db.scalar(select(func.count(Tenant.id))):
+            # the first administrator used to be called "Administrator"; give it the configured name
+            for u in db.scalars(select(User).where(User.is_superadmin.is_(True), User.name == "Administrator")):
+                u.name = s.bootstrap_admin_name
             return
         tenant = Tenant(name=s.bootstrap_tenant, slug="default", license_plan="standard",
                         license_max_companies=10, license_max_users=50)
         db.add(tenant)
         db.flush()
-        admin = User(tenant_id=tenant.id, email=s.bootstrap_admin_email.lower(), name="Administrator", role="admin",
+        admin = User(tenant_id=tenant.id, email=s.bootstrap_admin_email.lower(), name=s.bootstrap_admin_name, role="admin",
                      password_hash=hash_password(s.bootstrap_admin_password), is_superadmin=True)
         db.add(admin)
         db.flush()

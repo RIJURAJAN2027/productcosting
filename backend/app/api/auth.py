@@ -15,7 +15,8 @@ from .. import audit
 from ..db import get_db
 from ..deps import PERMISSIONS, get_current_user
 from ..models import Company, Tenant, User, now
-from ..security import create_access_token, hash_password, password_problems, valid_email, verify_password
+from ..security import (allowed_domains, create_access_token, email_domain_ok, hash_password, password_problems,
+                        valid_email, verify_password)
 from ..settings import get_settings
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -68,6 +69,10 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
         db.commit()
         raise HTTPException(401, "Invalid email or password")
     _check_tenant(db, user)
+    tenant = db.get(Tenant, user.tenant_id)
+    domains = allowed_domains(tenant.settings if tenant else None)
+    if not user.is_superadmin and not email_domain_ok(user.email, domains):
+        raise HTTPException(403, "Sign in with your company e-mail address.")
     user.failed_logins = 0
     user.last_login = now()
     audit.log(db, user, "login", "user", user.id, ip=request.client.host if request.client else None)
@@ -83,6 +88,9 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
 
 @router.post("/change-password")
 def change_password(body: PasswordIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Only administrators change passwords; everyone else asks an administrator (Administration -> Users)."""
+    if not (user.is_superadmin or user.role == "admin"):
+        raise HTTPException(403, "Passwords are changed by your administrator. Please contact them.")
     if not verify_password(body.current_password, user.password_hash):
         raise HTTPException(400, "Current password is incorrect")
     problems = password_problems(body.new_password)

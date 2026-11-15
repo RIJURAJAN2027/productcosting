@@ -101,7 +101,34 @@ period supersedes the earlier one.
 When the month is final, an approver **locks the period** (*Periods & uploads*). Uploads, adjustments
 and calculations are then blocked; only an admin can unlock.
 
+## Sign-in and passwords
+
+* Sign in with your company e-mail address (by default `@lntvalves.com`) and your password.
+* Accounts are created by an admin under *Administration → Users*. Only admins set and change passwords;
+  if you forget yours, ask an admin to set a new one.
+* Admins choose the allowed e-mail domains under *Administration → Organisation & licence → Sign-in*.
+
+## Reports pack
+
+The dashboard's *Reports pack* bar shows the selected period, its calculation and the trial balances it used,
+and downloads:
+
+* **PowerPoint** – the management presentation in the layout of the workbook's *PPT formats* sheet (plant-wise
+  performance, PG-wise performance per plant, a product group across plants, the company as a whole). The file is
+  marked as final, so it opens read-only.
+* **PDF** – the same slides.
+* **Excel** – every report in one workbook.
+* **Download all** – one ZIP with the Excel pack, the presentation (PowerPoint and PDF) and the plant-wise and
+  all-PG PDFs.
+
+The same downloads are on the *P&L reports* page.
+
+
 ## Reports
+
+Besides the P&L layouts, *Cost breakdown* shows each cost element by plant as an amount and % of sales,
+*PG ranking* ranks product groups by PBT % with their share of company profit, and *Exceptions* lists losses,
+thin margins (PBT below 5 % of sales) and material cost more than 5 points above the company average.
 
 *Reports* shows the selected run (published by default). Tabs:
 

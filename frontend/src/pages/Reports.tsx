@@ -6,17 +6,23 @@ import { useApp } from "../context";
 import { fmt, pct, UNIT_LABEL } from "../format";
 import type { Report, ReportRow, Run } from "../types";
 import { Badge, Drawer, ErrorBox, Loading, Num, Tabs } from "../components/ui";
+import { Icon } from "../components/icons";
 
-type Tab = "plant_wise" | "pg_wise" | "all_pg" | "pg_totals" | "mc" | "mis" | "summary";
+type Tab = "plant_wise" | "pg_wise" | "all_pg" | "pg_totals" | "cost" | "ranking" | "mc" | "exceptions" | "mis" | "summary";
 const TABS: { key: Tab; label: string }[] = [
   { key: "plant_wise", label: "Plant-wise P&L" },
   { key: "pg_wise", label: "PG-wise P&L" },
   { key: "all_pg", label: "All PG" },
   { key: "pg_totals", label: "PG totals" },
+  { key: "cost", label: "Cost breakdown" },
+  { key: "ranking", label: "PG ranking" },
   { key: "mc", label: "MC %" },
+  { key: "exceptions", label: "Exceptions" },
   { key: "mis", label: "MIS check" },
   { key: "summary", label: "Management summary" },
 ];
+// reports built from the management summary in the browser
+const FROM_SUMMARY: Tab[] = ["cost", "ranking", "exceptions"];
 
 interface DrillPart { label: string; value: number; coefficient: number; kind: string; plant: string; code: string; category?: string; component?: string;
   sources: { gl: string | null; gl_desc?: string | null; dimension: string; value: number | null; share?: number; note?: string }[] }
@@ -156,9 +162,10 @@ export default function Reports() {
   const pgs = runInfo.data?.product_groups ?? [];
   useEffect(() => { if (plants.length && !plants.includes(plant)) setPlant(plants[0]); }, [plants]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (pgs.length && !pgs.includes(pg)) setPg(pgs[0]); }, [pgs]); // eslint-disable-line react-hooks/exhaustive-deps
+  const apiTab = FROM_SUMMARY.includes(tab) ? "summary" : tab;
   const rep = useQuery({
-    queryKey: ["report", runId, tab, plant, pg, unit],
-    queryFn: () => api.get<Report & { rows: unknown[] }>(`/api/runs/${runId}/reports/${tab}${qs({ plant: tab === "pg_wise" ? plant : undefined, pg: tab === "pg_totals" ? pg : undefined, unit })}`),
+    queryKey: ["report", runId, apiTab, plant, pg, unit],
+    queryFn: () => api.get<Report & { rows: unknown[] }>(`/api/runs/${runId}/reports/${apiTab}${qs({ plant: tab === "pg_wise" ? plant : undefined, pg: tab === "pg_totals" ? pg : undefined, unit })}`),
     enabled: !!runId && (tab !== "pg_wise" || !!plant) && (tab !== "pg_totals" || !!pg),
   });
   const nf = company?.settings.number_format ?? "indian";
@@ -182,11 +189,13 @@ export default function Reports() {
           {runId ? (
             <>
               {["plant_wise", "pg_wise", "all_pg", "pg_totals", "mc", "mis"].includes(tab) ? (
-                <button onClick={() => api.download(`/api/runs/${runId}/export/${exportName}.xlsx${qs({ plant: tab === "pg_wise" ? plant : undefined, pg: tab === "pg_totals" ? pg : undefined, unit })}`)}>⬇ Excel</button>
+                <button onClick={() => api.download(`/api/runs/${runId}/export/${exportName}.xlsx${qs({ plant: tab === "pg_wise" ? plant : undefined, pg: tab === "pg_totals" ? pg : undefined, unit })}`)}><Icon name="tb" size={15} />Excel</button>
               ) : null}
-              <button onClick={() => api.download(`/api/runs/${runId}/export/pack.xlsx${qs({ unit })}`)}>⬇ Full pack (Excel)</button>
+              <button onClick={() => api.download(`/api/runs/${runId}/export/pack.xlsx${qs({ unit })}`)}><Icon name="tb" size={15} />Full pack (Excel)</button>
+              <button onClick={() => api.download(`/api/runs/${runId}/export/presentation.pptx${qs({ unit })}`)}><Icon name="ppt" size={15} />PowerPoint</button>
+              <button className="primary" onClick={() => api.download(`/api/runs/${runId}/export/all.zip${qs({ unit })}`)}><Icon name="zip" size={15} />Download all</button>
               {["plant_wise", "pg_wise", "all_pg", "pg_totals"].includes(tab) ? (
-                <button onClick={() => api.download(`/api/runs/${runId}/export/${tab}.pdf${qs({ plant: tab === "pg_wise" ? plant : undefined, pg: tab === "pg_totals" ? pg : undefined, unit })}`)}>⬇ PDF</button>
+                <button onClick={() => api.download(`/api/runs/${runId}/export/${tab}.pdf${qs({ plant: tab === "pg_wise" ? plant : undefined, pg: tab === "pg_totals" ? pg : undefined, unit })}`)}><Icon name="doc" size={15} />PDF</button>
               ) : null}
             </>
           ) : null}
@@ -255,6 +264,9 @@ export default function Reports() {
             </div>
           ) : null}
           {rep.data && tab === "summary" ? <Summary data={rep.data as unknown as SummaryData} unit={unit} /> : null}
+          {rep.data && tab === "cost" ? <CostBreakdown data={rep.data as unknown as SummaryData} unit={unit} /> : null}
+          {rep.data && tab === "ranking" ? <Ranking data={rep.data as unknown as SummaryData} unit={unit} /> : null}
+          {rep.data && tab === "exceptions" ? <Exceptions data={rep.data as unknown as SummaryData} unit={unit} /> : null}
         </div>
       )}
       {drill && runId ? <DrillDown runId={runId} {...drill} unit={unit} onClose={() => setDrill(null)} /> : null}
@@ -292,6 +304,131 @@ function Summary({ data, unit }: { data: SummaryData; unit: string }) {
       <div className="muted small" style={{ padding: "0 12px" }}>Management / presentation format – {data.period.label} ({data.period.months} months) · {UNIT_LABEL[unit]}</div>
       {table(data.plants, "plant", "By plant")}
       {table(data.product_groups, "pg", "By product group (company)")}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------- reports built from the management summary
+type K = Record<string, number | null | string>;
+const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+const plantName = (p: string) => (p === "__ALL__" ? "Company" : p);
+
+function downloadCsv(name: string, head: string[], rows: (string | number | null | undefined)[][]) {
+  const esc = (x: unknown) => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const blob = new Blob([[head.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))].join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+}
+
+const ELEMENTS: { key: string; label: string; total?: boolean }[] = [
+  { key: "sales", label: "Sales", total: true },
+  { key: "material_cost", label: "Material cost" },
+  { key: "variable_cost", label: "Variable cost" },
+  { key: "gross_margin", label: "Gross margin", total: true },
+  { key: "factory_overhead", label: "Factory overhead" },
+  { key: "pre_factory", label: "People cost – factory" },
+  { key: "plant_profit", label: "Plant profit", total: true },
+  { key: "corporate_overheads", label: "Corporate overhead" },
+  { key: "pre_corporate", label: "People cost – corporate" },
+  { key: "other_credits", label: "Other income / (expense)" },
+  { key: "pbt", label: "Profit before tax", total: true },
+];
+
+function CostBreakdown({ data, unit }: { data: SummaryData; unit: string }) {
+  const plants = (data.plants as K[]).filter((p) => p.plant === "__ALL__" || Math.abs(n(p.sales) ?? 0) > 0.005 || Math.abs(n(p.pbt) ?? 0) > 0.005);
+  const rows = ELEMENTS.filter((e) => plants.some((p) => n(p[e.key]) !== undefined));
+  return (
+    <div className="stack" style={{ padding: 12 }}>
+      <div className="row"><span className="muted small">Each cost element as an amount and as % of the plant's sales · {UNIT_LABEL[unit]}</span><span className="grow" />
+        <button className="small" onClick={() => downloadCsv(`cost_breakdown_${data.period.label}.csv`, ["Element", ...plants.flatMap((p) => [plantName(String(p.plant)), "% of sales"])],
+          rows.map((e) => [e.label, ...plants.flatMap((p) => [n(p[e.key]), n(p.sales) ? (n(p[e.key]) ?? 0) / (n(p.sales) as number) : ""])]))}>CSV</button></div>
+      <div className="table-wrap">
+        <table className="data">
+          <thead><tr><th>Cost element</th>{plants.map((p) => <th key={String(p.plant)} className="num" colSpan={2}>{plantName(String(p.plant))}</th>)}</tr></thead>
+          <tbody>
+            {rows.map((e) => (
+              <tr key={e.key} style={e.total ? { fontWeight: 600, background: "var(--surface-2)" } : undefined}>
+                <td>{e.label}</td>
+                {plants.map((p) => {
+                  const v = n(p[e.key]); const s = n(p.sales);
+                  return [<td key={`${p.plant}v`} className="num"><Num v={v} /></td>,
+                    <td key={`${p.plant}p`} className="num muted">{s && Math.abs(s) > 0.005 && v !== undefined ? pct(v / s) : ""}</td>];
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function Ranking({ data, unit }: { data: SummaryData; unit: string }) {
+  const company = (data.plants as K[]).find((p) => p.plant === "__ALL__");
+  const totalPbt = n(company?.pbt) ?? 0;
+  const pgs = (data.product_groups as K[]).filter((p) => Math.abs(n(p.sales) ?? 0) > 0.005)
+    .sort((a, b) => (n(b.pbt_pct) ?? -Infinity) - (n(a.pbt_pct) ?? -Infinity));
+  return (
+    <div className="stack" style={{ padding: 12 }}>
+      <div className="row"><span className="muted small">Product groups (all plants) ranked by profit before tax as % of sales · {UNIT_LABEL[unit]}</span><span className="grow" />
+        <button className="small" onClick={() => downloadCsv(`pg_ranking_${data.period.label}.csv`, ["Rank", "Product group", "Sales", "MC %", "Gross margin", "GM %", "PBT", "PBT %", "Share of company PBT"],
+          pgs.map((p, i) => [i + 1, String(p.pg), n(p.sales), n(p.material_cost_pct), n(p.gross_margin), n(p.gross_margin_pct), n(p.pbt), n(p.pbt_pct), totalPbt ? (n(p.pbt) ?? 0) / totalPbt : ""]))}>CSV</button></div>
+      <div className="table-wrap">
+        <table className="data">
+          <thead><tr><th className="num">#</th><th>Product group</th><th className="num">Sales</th><th className="num">MC %</th><th className="num">Gross margin</th><th className="num">GM %</th><th className="num">PBT</th><th className="num">PBT %</th><th className="num">Share of PBT</th></tr></thead>
+          <tbody>
+            {pgs.map((p, i) => (
+              <tr key={String(p.pg)}>
+                <td className="num muted">{i + 1}</td><td><strong>{String(p.pg)}</strong></td>
+                <td className="num"><Num v={n(p.sales)} /></td><td className="num">{pct(n(p.material_cost_pct))}</td>
+                <td className="num"><Num v={n(p.gross_margin)} /></td><td className="num">{pct(n(p.gross_margin_pct))}</td>
+                <td className="num"><Num v={n(p.pbt)} /></td><td className="num"><strong>{pct(n(p.pbt_pct))}</strong></td>
+                <td className="num">{totalPbt ? pct((n(p.pbt) ?? 0) / totalPbt) : ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function Exceptions({ data, unit }: { data: SummaryData; unit: string }) {
+  const company = (data.plants as K[]).find((p) => p.plant === "__ALL__");
+  const mcCo = n(company?.material_cost_pct);
+  const items: { level: "bad" | "warn"; what: string; who: string; value: string }[] = [];
+  const check = (rows: K[], kind: "Plant" | "Product group", key: string) => {
+    for (const r of rows) {
+      const name = String(r[key]);
+      if (name === "__ALL__") continue;
+      const sales = n(r.sales) ?? 0; const pbt = n(r.pbt) ?? 0;
+      if (Math.abs(sales) < 0.005 && Math.abs(pbt) < 0.005) continue;
+      if (pbt < -0.005) items.push({ level: "bad", what: "Loss", who: `${kind} ${name}`, value: `PBT ${fmt(pbt)}` });
+      else if (Math.abs(sales) >= 0.005 && (n(r.pbt_pct) ?? 0) < 0.05) items.push({ level: "warn", what: "Thin margin (PBT below 5% of sales)", who: `${kind} ${name}`, value: `PBT ${pct(n(r.pbt_pct))}` });
+      const mc = n(r.material_cost_pct);
+      if (mcCo !== undefined && mc !== undefined && Math.abs(sales) >= 0.005 && mc - mcCo > 0.05)
+        items.push({ level: "warn", what: "Material cost above company average by more than 5 pp", who: `${kind} ${name}`, value: `MC ${pct(mc)} vs ${pct(mcCo)}` });
+    }
+  };
+  check(data.plants as K[], "Plant", "plant");
+  check(data.product_groups as K[], "Product group", "pg");
+  items.sort((a, b) => (a.level === "bad" ? 0 : 1) - (b.level === "bad" ? 0 : 1));
+  return (
+    <div className="stack" style={{ padding: 12 }}>
+      <div className="muted small">Plants and product groups that need attention · {data.period.label} · {UNIT_LABEL[unit]}</div>
+      {items.length ? (
+        <table className="data">
+          <thead><tr><th>Issue</th><th>Where</th><th className="num">Figure</th></tr></thead>
+          <tbody>
+            {items.map((x, i) => (
+              <tr key={i}><td><span className={`r-pill ${x.level}`}>{x.what}</span></td><td><strong>{x.who}</strong></td><td className="num">{x.value}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <div className="tb-ok">No exceptions: every plant and product group is profitable with a normal material cost.</div>}
     </div>
   );
 }

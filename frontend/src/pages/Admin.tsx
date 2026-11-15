@@ -5,6 +5,7 @@ import { useApp, useAuth, useToast } from "../context";
 import { dateTime, fmt, UNIT_LABEL } from "../format";
 import type { Company } from "../types";
 import { Badge, ErrorBox, Field, FileDrop, Loading, Modal, Tabs } from "../components/ui";
+import { Icon } from "../components/icons";
 
 interface UserRow { id: number; email: string; name: string; role: string; is_active: boolean; company_ids: number[] | null; auth_provider: string; last_login: string | null; locked: boolean }
 interface Tenant { id: number; name: string; slug: string; license_plan: string; license_max_companies: number; license_max_users: number; license_expires: string | null; usage: { users: number; companies: number }; settings: Record<string, unknown> }
@@ -42,20 +43,13 @@ function UserEditor({ user, companies, onClose }: { user: UserRow | null; compan
     <Modal title={user ? `Edit ${user.email}` : "New user"} onClose={onClose}
       footer={<><button onClick={onClose}>Cancel</button><button className="primary" onClick={save}>Save</button></>}>
       <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
-        <Field label="Email"><input type="email" value={f.email} disabled={!!user} onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
+        <Field label="Company e-mail"><input type="email" value={f.email} disabled={!!user} placeholder="name@lntvalves.com" onChange={(e) => setF({ ...f, email: e.target.value })} /></Field>
         <Field label="Name"><input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
         <Field label="Role">
           <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>{ROLES.map(([r, l]) => <option key={r} value={r}>{l}</option>)}</select>
         </Field>
-        {!user ? (
-          <Field label="Sign-in">
-            <select value={f.auth_provider} onChange={(e) => setF({ ...f, auth_provider: e.target.value })}>
-              <option value="local">Email & password</option><option value="oidc">Single sign-on (OIDC) only</option>
-            </select>
-          </Field>
-        ) : null}
         {f.auth_provider === "local" ? (
-          <Field label={user ? "Reset password (optional)" : "Initial password"} hint="At least 10 characters with upper- and lower-case letters and a digit.">
+          <Field label={user ? "New password (leave empty to keep)" : "Password"} hint="At least 10 characters with upper- and lower-case letters and a digit. Give it to the user; only an admin can change it.">
             <input type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
           </Field>
         ) : null}
@@ -217,12 +211,14 @@ function Organisation() {
   const { me } = useAuth();
   const toast = useToast();
   const q = useQuery({ queryKey: ["tenant"], queryFn: () => api.get<Tenant>("/api/tenant") });
-  const sso = useQuery({ queryKey: ["sso"], queryFn: () => api.get<{ enabled: boolean; issuer: string | null }>("/api/auth/sso/config") });
   const [name, setName] = useState("");
+  const [domains, setDomains] = useState("");
   const [lic, setLic] = useState<Record<string, string>>({});
   useEffect(() => {
     if (!q.data) return;
     setName(q.data.name);
+    const d = q.data.settings.allowed_email_domains;
+    setDomains(Array.isArray(d) ? d.join(", ") : typeof d === "string" ? d : "lntvalves.com");
     setLic({ license_plan: q.data.license_plan, license_max_companies: String(q.data.license_max_companies), license_max_users: String(q.data.license_max_users), license_expires: q.data.license_expires ?? "" });
   }, [q.data]);
   const patch = async (body: Record<string, unknown>) => {
@@ -268,9 +264,14 @@ function Organisation() {
         </label>
       </div>
       <div className="card stack">
-        <h3 style={{ margin: 0 }}>Single sign-on</h3>
-        {sso.data?.enabled ? <div className="small"><Badge status="ok">enabled</Badge> OpenID Connect issuer <code>{sso.data.issuer}</code>. Users must exist here (created as “SSO”) before they can sign in.</div>
-          : <div className="small muted">Not configured. Set <code>PC_OIDC_ISSUER</code>, <code>PC_OIDC_CLIENT_ID</code>, <code>PC_OIDC_CLIENT_SECRET</code> and <code>PC_OIDC_REDIRECT_URI</code> on the server (Azure AD / Entra ID, Okta, Google Workspace, Keycloak …) – see the admin guide.</div>}
+        <h3 style={{ margin: 0 }}>Sign-in</h3>
+        <div className="small muted">Users sign in with their company e-mail and a password created here by an admin. Only admins change passwords; a user who forgets it asks an admin.</div>
+        <div className="row" style={{ alignItems: "flex-end" }}>
+          <Field label="Company e-mail domains" hint="Comma-separated, e.g. lntvalves.com. Empty allows any domain.">
+            <input value={domains} onChange={(e) => setDomains(e.target.value)} style={{ minWidth: 280 }} />
+          </Field>
+          <button onClick={() => patch({ settings: { ...t.settings, allowed_email_domains: domains.split(",").map((d) => d.trim()).filter(Boolean) } })}>Save</button>
+        </div>
       </div>
     </div>
   );
@@ -296,7 +297,7 @@ function Backup() {
       <div className="card stack">
         <h3 style={{ margin: 0 }}>Back up {company?.name}</h3>
         <div className="small muted">Downloads one compressed file with the company's settings, masters, report layouts, periods, uploads (TB lines), adjustments, MIS figures and calculation runs with their stored results. For whole-server backups use the database backup described in the admin guide.</div>
-        <div><button className="primary" onClick={() => api.download(`/api/companies/${companyId}/backup`)}>⬇ Download backup</button></div>
+        <div><button className="primary" onClick={() => api.download(`/api/companies/${companyId}/backup`)}><Icon name="download" size={15} />Download backup</button></div>
       </div>
       <div className="card stack">
         <h3 style={{ margin: 0 }}>Restore</h3>
@@ -491,7 +492,6 @@ export default function Admin() {
       <div className="page-head">
         <div>
           <h1>Administration</h1>
-          <p>Users and roles, company settings and number formats, licence and approval policy, backup / restore, and set-up from the legacy Excel workbook.</p>
         </div>
       </div>
       <div className="card flush">
