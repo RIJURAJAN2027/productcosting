@@ -398,7 +398,57 @@ git pull
 docker compose up -d --build
 ```
 
-Database migrations run automatically on start. Take a database backup first.
+Database migrations run automatically on start. Take a database backup first – or use `sudo scripts/deploy.sh`,
+which backs up the database, rebuilds, restarts and waits until the application answers.
+
+### Automatic deployment on merge (Oracle Cloud)
+
+`.github/workflows/deploy.yml` updates the Oracle Cloud server whenever a change is merged into `main` and the
+CI tests pass on it. GitHub copies the code to the server over SSH (the server needs no GitHub access) and runs
+`scripts/deploy.sh`. `.env`, the database and the `backups` folder are never changed. It can also be started by
+hand: *Actions → Deploy → Run workflow*.
+
+One-time set-up:
+
+1. Install the application once with `sudo scripts/install-server.sh` (see 1. Installation).
+2. On your own computer, create a key pair used only for deployments:
+
+   ```bash
+   ssh-keygen -t ed25519 -f productcosting-deploy -N "" -C "github-deploy"
+   ```
+
+3. On the server, allow that key for the SSH user (on Oracle Cloud Ubuntu images: `ubuntu`, which may use `sudo`
+   without a password):
+
+   ```bash
+   cat productcosting-deploy.pub >> ~/.ssh/authorized_keys
+   ```
+
+4. Print the server's host key, so GitHub can check it is talking to your server:
+
+   ```bash
+   ssh-keyscan <server-ip-or-domain>
+   ```
+
+5. In GitHub: *Settings → Secrets and variables → Actions → New repository secret*, add
+
+   | Secret | Value |
+   |---|---|
+   | `ORACLE_HOST` | the server's public IP or domain |
+   | `ORACLE_USER` | `ubuntu` |
+   | `ORACLE_SSH_KEY` | the whole content of the private key file `productcosting-deploy` |
+   | `ORACLE_APP_DIR` | the installation folder, e.g. `/home/ubuntu/productcosting` |
+   | `ORACLE_KNOWN_HOSTS` | the lines printed in step 4 |
+   | `ORACLE_SSH_PORT` | only if SSH does not use port 22 |
+
+6. Optional: under *Settings → Environments → production*, add yourself as a required reviewer so that every
+   deployment waits for your approval.
+
+From then on: merge a pull request into `main` → CI runs → the server is backed up and updated. Each run shows
+its log under *Actions → Deploy*; the deployed commit is written to `.deployed-revision` on the server. If a
+deployment fails, the previous containers keep running until the new ones answer, and the backup taken just
+before is in `backups/` (restore: section 6). Once automatic deployment is on, do not edit files in the
+installation folder by hand – the next deployment replaces them.
 
 ## 8. Monitoring and logs
 
