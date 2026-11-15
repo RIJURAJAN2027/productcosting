@@ -423,3 +423,23 @@ def test_master_sheet_gl_type_and_setup(client, H, company_id):
     assert after["99001"]["gl_type"] == "PRE"                 # new GL follows the category's GLs
     cc = {c["code"]: c for c in client.get(base, headers=H["viewer"]).json()["sections"]["cc"]}
     assert cc["ZZ-CC"]["plant_code"] == "ZZP"
+
+
+def test_upload_lists_only_codes_with_amounts(client, H, company_id):
+    r = client.post(f"/api/companies/{company_id}/periods", headers=H["analyst"],
+                    json={"code": "2027-05", "label": "Empty columns", "end_date": "2027-05-31", "start_date": "2027-04-01"})
+    pid = r.json()["id"]
+    data = tb_xlsx([(50000, "Sales - Domestic", [-100.0, 0.0, -7.0]), (88888, "Unused GL", [0.0, 0.0, 0.0])],
+                   ["NTH_GATE", "EMPTY_COL", "NEW_WITH_AMOUNT"])
+    up = client.post(f"/api/companies/{company_id}/periods/{pid}/uploads", headers=H["analyst"],
+                     data={"kind": "BA_TB"}, files={"file": ("tb.xlsx", data)}).json()
+    codes = {i.get("code") for i in up["issues"] if i["type"].startswith("new_")}
+    assert codes == {"NEW_WITH_AMOUNT"}          # empty column and zero GL are not problems
+
+
+def test_pg_wise_cor_column_is_after_allocation(client, H, company_id):
+    runs = client.get(f"/api/companies/{company_id}/runs", headers=H["viewer"]).json()
+    rid = next(r["id"] for r in runs if r["status"] != "failed")
+    rep = client.get(f"/api/runs/{rid}/reports/pg_wise", headers=H["viewer"]).json()
+    i = next(n for n, c in enumerate(rep["columns"]) if c["code"] == "COR")
+    assert all(abs(r["values"][i]) < 1e-12 for r in rep["rows"] if r["kind"] == "line")

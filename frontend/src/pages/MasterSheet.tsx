@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
 import { api, qs } from "../api";
 import { useApp, useAuth, useToast } from "../context";
 import { fmt } from "../format";
@@ -283,65 +282,31 @@ export default function MasterSheet() {
   const st = d.stats;
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>Master dashboard</h1>
-          <p>
-            Business areas, GL accounts and cost centres in the workbook's Masters layout. Edit here or upload the same
-            Excel – new rows are added and changes take effect from the period you choose, so the next calculations
-            pick them up automatically while earlier periods keep their mapping.
-          </p>
-        </div>
-        <div className="row">
-          <button onClick={() => api.download(`/api/companies/${companyId}/master-sheet/export${qs({ on })}`, "master.xlsx")}>
-            <Icon name="download" size={15} />Download Excel
-          </button>
-          {editable ? <button className="primary" onClick={() => setShowUpload(true)}><Icon name="upload" size={15} />Upload Excel</button> : null}
-        </div>
-      </div>
-
-      <div className="card apply-bar">
-        <div className="row" style={{ gap: 12 }}>
-          <span className="apply-icon"><Icon name="target" size={18} /></span>
-          <div>
-            <div style={{ fontWeight: 650 }}>Changes apply from</div>
-            <div className="muted small">The sheet shows the master valid then; edits and uploads start on that date.</div>
-          </div>
+      <div className="master-toolbar card">
+        <label className="filter">
+          <span>Apply from</span>
           <select value={on} onChange={(e) => { if (changeCount && !confirm("Discard unsaved changes?")) return; setDraft(emptyDraft()); setApplyFrom(e.target.value); }}>
             {choices.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
           </select>
+        </label>
+        <div className="master-counts">
+          <span><strong>{st.ba.rows}</strong> business areas</span>
+          <span><strong>{st.gl.rows}</strong> GLs</span>
+          <span><strong>{st.cc.rows}</strong> cost centres</span>
+          {st.ba.missing + st.gl.missing + st.cc.missing ? <span className="warn"><strong>{st.ba.missing + st.gl.missing + st.cc.missing}</strong> need mapping</span> : null}
+          {pendingCount ? <span className="warn"><strong>{pendingCount}</strong> new in TBs</span> : null}
         </div>
-      </div>
-
-      <div className="stat-cards">
-        <div className="stat-card navy"><div className="stat-text">
-          <div className="title">Business areas</div><div className="value">{st.ba.rows}</div>
-          <div className="sub">{st.ba.missing ? <span className="var-chip">{st.ba.missing} need mapping</span> : "All mapped to plant and PG"}</div>
-        </div></div>
-        <div className="stat-card violet"><div className="stat-text">
-          <div className="title">GL accounts</div><div className="value">{st.gl.rows}</div>
-          <div className="sub">Non-PRE {st.gl.by_type?.NONPRE ?? 0} · PRE {st.gl.by_type?.PRE ?? 0} · Excluded {st.gl.by_type?.EXCLUDED ?? 0}
-            {st.gl.missing ? <> · <span className="var-chip">{st.gl.missing} need mapping</span></> : null}</div>
-        </div></div>
-        <div className="stat-card teal"><div className="stat-text">
-          <div className="title">Cost centres</div><div className="value">{st.cc.rows}</div>
-          <div className="sub">{st.cc.missing ? <span className="var-chip">{st.cc.missing} need mapping</span> : "All mapped to BArea and allocation"}</div>
-        </div></div>
-        <div className="stat-card amber"><div className="stat-text">
-          <div className="title">New in trial balances</div><div className="value">{pendingCount}</div>
-          <div className="sub">{period ? `${period.label || period.code} uploads` : "Select a period"} · BA {pending.ba.length} · GL {pending.gl.length} · CC {pending.cc.length}</div>
-        </div></div>
+        <span className="grow" />
+        <button className="excel-btn" onClick={() => api.download(`/api/companies/${companyId}/master-sheet/export${qs({ on })}`, "master.xlsx")}>
+          <Icon name="download" size={16} />Download Excel
+        </button>
+        {editable ? <button className="excel-btn primary" onClick={() => setShowUpload(true)}><Icon name="upload" size={16} />Upload Excel</button> : null}
       </div>
 
       {pendingCount ? (
         <div className="card pending-card">
           <div className="card-head">
-            <div>
-              <h2><Icon name="sparkle" size={16} /> New codes in the uploaded trial balances</h2>
-              <div className="muted small">
-                Found in the {period?.label || period?.code} BA / CC trial balances but not in the master. Add them, fill in the mapping and save.
-              </div>
-            </div>
+            <h2><Icon name="sparkle" size={16} /> New in the trial balances</h2>
             {editable ? <button className="primary" onClick={() => SECS.forEach((s) => addPending(s, pending[s]))}><Icon name="plus" size={15} />Add all to the sheet</button> : null}
           </div>
           <div className="pending-grid">
@@ -366,10 +331,7 @@ export default function MasterSheet() {
 
       <div className="card flush">
         <div className="card-head" style={{ padding: "14px 16px 10px", marginBottom: 0 }}>
-          <div>
-            <h2>Master sheet</h2>
-            <div className="muted small">Valid {on ? `from ${monthLabel(on)}` : "– latest version"} · click a cell to edit · type in the filter row to filter a column, "(blank)" for empty cells</div>
-          </div>
+          <h2>Master sheet</h2>
           <div className="row">
             <label className="row small"><input type="checkbox" checked={onlyMissing} onChange={(e) => setOnlyMissing(e.target.checked)} /> Only rows that need mapping</label>
             {Object.values(filters).some(Boolean) ? <button className="small" onClick={() => setFilters({})}><Icon name="x" size={12} />Clear filters</button> : null}
@@ -462,10 +424,6 @@ export default function MasterSheet() {
             qc.invalidateQueries({ queryKey: ["master", companyId] });
           }} />
       ) : null}
-      <p className="muted small">
-        Plants, product groups, categories and PRE functions are set up under <Link to="/masters">Masters</Link>. The plant of a cost
-        centre comes from its BArea; a Category1 in the PRE list makes the GL a PRE GL and "Excluded" leaves it out of the P&amp;L.
-      </p>
     </>
   );
 }
@@ -508,11 +466,7 @@ function UploadDialog({ companyId, on, applyLabel, onClose, onDone }: {
         {busy ? "Applying…" : changes ? `Apply ${changes} change(s)` : "Nothing to apply"}
       </button>
     </>) : undefined}>
-      <p className="muted" style={{ margin: 0 }}>
-        Upload the master in the same format (BA · Plant · COM/COR/PG · Product family | GL · GL Descript · Category1 | Cost centre ·
-        Cost centre descrip · BArea · Function · Allocation logic). A file with only the new rows works too. Blank cells never clear a value.
-        Changes apply from <strong>{applyLabel}</strong>.
-      </p>
+      <p className="muted" style={{ margin: 0 }}>Changes apply from <strong>{applyLabel}</strong>.</p>
       <label className="row small"><input type="checkbox" checked={removeMissing}
         onChange={(e) => { setRemoveMissing(e.target.checked); if (file) run(file, true, e.target.checked); }} />
         Also remove codes that are not in the file (use only with a complete master)</label>

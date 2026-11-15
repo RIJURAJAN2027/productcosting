@@ -219,7 +219,9 @@ def validate_against_masters(parsed: TbParseResult, known_gls: set[str], known_d
     if new_gl:
         amt = df[df["gl"].isin(new_gl)].groupby("gl")["amount"].sum()
         for gl in new_gl:
-            out.append({"level": "error" if abs(amt.get(gl, 0.0)) > 0 else "warning", "type": "new_gl",
+            if abs(amt.get(gl, 0.0)) < 0.005:      # no amount: nothing to map, not a problem
+                continue
+            out.append({"level": "error", "type": "new_gl",
                         "code": gl, "description": parsed.gl_info[gl]["description"],
                         "amount": float(amt.get(gl, 0.0)),
                         "message": f"GL {gl} ({parsed.gl_info[gl]['description']}) is not in the GL master."})
@@ -228,8 +230,10 @@ def validate_against_masters(parsed: TbParseResult, known_gls: set[str], known_d
         amt = df[df["dim"].isin(new_dim)].groupby("dim")["amount"].sum()
         label = "business area" if parsed.kind == "BA" else "cost centre"
         for d in new_dim:
-            out.append({"level": "error" if abs(amt.get(d, 0.0)) > 0 else "warning",
+            if abs(amt.get(d, 0.0)) < 0.005:        # an empty column needs no mapping
+                continue
+            out.append({"level": "error",
                         "type": "new_ba" if parsed.kind == "BA" else "new_cc", "code": d,
                         "amount": float(amt.get(d, 0.0)),
-                        "message": f"Column {d} is not in the {label} master."})
+                        "message": f"{label[0].upper() + label[1:]} {d} has amounts but is not in the master."})
     return out

@@ -137,7 +137,6 @@ export default function Runs() {
       <div className="page-head">
         <div>
           <h1>Calculations</h1>
-          <p>Each calculation stores a snapshot of the masters and inputs it used, so results are reproducible and auditable. Publish requires a second person (maker-checker).</p>
         </div>
       </div>
       {can("edit") && period ? (

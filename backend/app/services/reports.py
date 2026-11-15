@@ -83,7 +83,9 @@ def report_columns(name: str, cfg: EngineConfig, plant: str | None, pg: str | No
             raise HTTPException(404, f"Unknown plant {plant}")
         cols = [{"plant": plant, "code": g, "label": g, "family": families.get(g, "")} for g in cfg.product_groups]
         cols.append({"plant": plant, "code": cfg.com_code, "label": cfg.com_code, "family": "Common"})
-        cols.append({"plant": plant, "code": "COR", "label": "COR", "family": "Corp (memo)", "memo": True})
+        # COR is shown after the corporate pool is allocated, as in the workbook: always zero.  (The plant's
+        # corporate costs before pooling are not part of the plant total and are not shown as a column.)
+        cols.append({"plant": plant, "code": "COR", "label": "COR", "family": "Corp", "after_allocation": True})
         cols.append({"plant": plant, "code": TOTAL, "label": f"{plant} total", "family": "Total"})
         return cols
     if name == "plant_wise":
@@ -113,6 +115,8 @@ def build_report(db: Session, run: CalcRun, name: str, plant: str | None = None,
     lines = {ln["code"]: ln for ln in cfg.lines}
 
     def value(line: str, col: dict) -> float:
+        if col.get("after_allocation"):
+            return 0.0
         return vals.get((line, col["plant"], col["code"]), 0.0)
 
     out_rows = []
@@ -126,7 +130,7 @@ def build_report(db: Session, run: CalcRun, name: str, plant: str | None = None,
         pct = []
         base_text = row.get("pct_base") or lines.get(code, {}).get("pct_base")
         for c, v in zip(cols, values):
-            if not base_text or c.get("memo"):
+            if not base_text:
                 pct.append(None)
                 continue
             try:

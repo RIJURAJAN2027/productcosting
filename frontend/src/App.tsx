@@ -23,15 +23,13 @@ type NavItem = { to: string; label: string; short: string; icon: IconName; group
 // Every product-costing feature, in workflow order: inputs → calculation → analysis → set-up.
 const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", short: "Dashboard", icon: "dashboard", group: "Overview" },
-  { to: "/master", label: "Master dashboard", short: "Master", icon: "sheet", group: "Inputs" },
+  { to: "/master", label: "Master", short: "Master", icon: "sheet", group: "Inputs" },
   { to: "/periods", label: "Periods & uploads", short: "Trial balances", icon: "upload", group: "Inputs" },
   { to: "/adjustments", label: "Adjustments & inputs", short: "Adjustments", icon: "adjust", group: "Inputs" },
   { to: "/runs", label: "Calculations", short: "Calculations", icon: "calc", group: "Costing" },
   { to: "/reports", label: "Reports", short: "P&L reports", icon: "reports", group: "Analysis" },
   { to: "/compare", label: "Compare", short: "Compare", icon: "compare", group: "Analysis" },
   { to: "/masters", label: "Masters", short: "Masters", icon: "masters", group: "Set-up" },
-  { to: "/audit", label: "Audit trail", short: "Audit trail", icon: "audit", group: "Set-up" },
-  { to: "/admin", label: "Administration", short: "Admin", icon: "admin", group: "Set-up", perm: "admin" },
 ];
 
 const THEMES: { v: "auto" | "light" | "dark"; icon: IconName; label: string }[] = [
@@ -45,7 +43,7 @@ function initials(s: string) {
 }
 
 function UserMenu() {
-  const { me, logout } = useAuth();
+  const { me, logout, can } = useAuth();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const loc = useLocation();
@@ -74,6 +72,8 @@ function UserMenu() {
             <span className="muted small">{me.email} · {me.tenant.name}</span>
           </div>
           <Link to="/profile" role="menuitem"><Icon name="user" size={16} />Profile</Link>
+          <Link to="/audit" role="menuitem"><Icon name="audit" size={16} />Audit trail</Link>
+          {can("admin") ? <Link to="/admin" role="menuitem"><Icon name="admin" size={16} />Administration</Link> : null}
           <button role="menuitem" onClick={logout}><Icon name="logout" size={16} />Sign out</button>
         </div>
       ) : null}
@@ -95,11 +95,6 @@ function AppBar() {
         <Link to="/" className="brand-long" aria-label="Home">
           <img src="/brand/logo-long.png" alt="L&T Valves" />
         </Link>
-        <span className="brand-divider" aria-hidden />
-        <div className="app-title">
-          <strong>Product Costing &amp; Profitability</strong>
-          <small>{app.company?.name ?? me?.tenant.name}</small>
-        </div>
         <span className="grow" />
         <div className="filters">
           {hasCompany ? (<>

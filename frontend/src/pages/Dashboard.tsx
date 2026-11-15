@@ -6,7 +6,7 @@ import { api, qs } from "../api";
 import { useApp } from "../context";
 import { fmt, pct, UNIT_LABEL } from "../format";
 import type { Kpis, Run } from "../types";
-import { Badge, ErrorBox, Loading } from "../components/ui";
+import { ErrorBox, Loading } from "../components/ui";
 import { Icon } from "../components/icons";
 
 interface DashboardData {
@@ -203,9 +203,7 @@ export default function Dashboard() {
         <div>
           <h1>{company?.name}</h1>
           <p className="head-meta">
-            <span>{cur.label}</span>
-            <span>Run #{cur.run.id} <Badge status={cur.run.status} /></span>
-            <span>{b ? "Compared with budget" : "No budget loaded"}</span>
+            <span>Run #{cur.run.id}</span>
             <span>Amounts in {UNIT_LABEL[u]}</span>
           </p>
         </div>

@@ -310,7 +310,7 @@ function Templates() {
 interface Validation { problems: { level: "error" | "warning"; message: string }[]; counts: Record<string, number> }
 
 export default function Masters() {
-  const { companyId, company } = useApp();
+  const { companyId } = useApp();
   const { can } = useAuth();
   const toast = useToast();
   const qc = useQueryClient();
@@ -343,7 +343,6 @@ export default function Masters() {
       <div className="page-head">
         <div>
           <h1>Masters</h1>
-          <p>Mappings and rules that drive the calculation for {company?.name}. Every row has an effective-date range, so you can change a mapping from a date without rewriting history; every change is recorded in the audit trail.</p>
         </div>
         <div className="row">
           <button onClick={() => api.download(`/api/companies/${companyId}/masters-export`)}>⬇ Export to Excel</button>

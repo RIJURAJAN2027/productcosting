@@ -95,7 +95,7 @@ export interface ReportColumn {
   code: string;
   label: string;
   family: string;
-  memo?: boolean;
+  after_allocation?: boolean;
 }
 
 export interface ReportRow {

@@ -157,7 +157,6 @@ function AdjustmentRules({ locked }: { locked: boolean }) {
   return (
     <div className="stack" style={{ padding: 12 }}>
       <div className="row">
-        <div className="muted small">Adjustments are applied to the trial balances before tagging, in this order. Each needs a reason and is kept with its author in the audit trail; the original upload is never changed.</div>
         <span className="right" />
         {can("edit") && !locked ? <button className="primary" onClick={() => setEdit(null)}>+ New adjustment</button> : null}
       </div>
@@ -230,7 +229,6 @@ function McAdjustments({ locked }: { locked: boolean }) {
   };
   return (
     <div className="stack" style={{ padding: 12 }}>
-      <div className="muted small">Material cost per the TB can be corrected to the worked-out figure (e.g. from an SAP material-cost report or production data) per plant × product group, either as an amount added to material cost or as a target MC % of sales. The MC % report shows both the TB and the worked-out figures.</div>
       {can("edit") && !locked ? (
         <div className="row" style={{ alignItems: "flex-end" }}>
           <Field label="Plant"><select value={form.plant_code} onChange={(e) => setForm({ ...form, plant_code: e.target.value })}>{plants.map((p) => <option key={p}>{p}</option>)}</select></Field>
@@ -296,7 +294,6 @@ function Drivers({ locked }: { locked: boolean }) {
   const editable = can("edit") && !locked;
   return (
     <div className="stack" style={{ padding: 12 }}>
-      <div className="muted small">Drivers are quantities (machine hours, power units, headcount, production tonnes …) that allocation rules can use as a basis with <code>{'{"kind": "driver", "driver": "name"}'}</code>. Enter them per plant × product group.</div>
       <div className="row">
         <select value={names.includes(name) ? name : ""} onChange={(e) => setName(e.target.value)}>
           <option value="" disabled>{names.length ? "Choose driver" : "No drivers yet"}</option>
@@ -360,7 +357,6 @@ function MisLines({ locked }: { locked: boolean }) {
   };
   return (
     <div className="stack" style={{ padding: 12 }}>
-      <div className="muted small">MIS figures are reconciled with the product-costing P&L in the <em>MIS check</em> report. The formula picks the P&L lines to compare, e.g. <code>[L:sales_total]</code> or <code>[L:pbt]</code>. “sum” expects MIS + P&L = 0 (MIS kept in TB sign); “difference” expects MIS = P&L. You can also upload a two-column MIS sheet on the Periods page.</div>
       {can("edit") && !locked ? (
         <div className="row" style={{ alignItems: "flex-end" }}>
           <Field label="Particulars"><input value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} /></Field>
@@ -392,13 +388,12 @@ export default function Adjustments() {
   const { period } = useApp();
   const [tab, setTab] = useState<"rules" | "mc" | "drivers" | "mis">("rules");
   const locked = period?.status === "locked";
-  if (!period) return <div className="card empty">Create a period first (Periods & uploads).</div>;
+  if (!period) return <div className="card empty">Create a period first.</div>;
   return (
     <>
       <div className="page-head">
         <div>
           <h1>Adjustments & inputs</h1>
-          <p>Manual inputs for {period.label || period.code}: TB adjustment rules, material-cost corrections, allocation drivers and MIS figures. {locked ? "This period is locked – inputs are read-only." : "Recalculate after changing them."}</p>
         </div>
         {locked ? <Badge status="locked">period locked</Badge> : null}
       </div>

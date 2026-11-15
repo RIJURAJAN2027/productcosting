@@ -112,7 +112,7 @@ function PnlTable({ rep, showPct, onDrill, numberFormat, decimals }: {
                   const p = r.pct?.[i];
                   const cell = (
                     <td key={`${i}v`} className={`v ${v < 0 ? "neg" : ""} ${c.code === "__TOTAL__" || c.plant === "__ALL__" ? "total" : ""}`}
-                      onClick={() => !c.memo && c.plant !== "__ALL__" && !r.ratio && onDrill(r, i)} title={c.memo ? "Corporate costs of this plant before pooling (memo)" : "Click to drill down"}>
+                      onClick={() => !c.after_allocation && c.plant !== "__ALL__" && !r.ratio && onDrill(r, i)} title={c.after_allocation ? "Corporate costs are allocated to the product groups" : "Click to drill down"}>
                       {fmt(v, decimals, numberFormat)}
                     </td>
                   );
@@ -174,7 +174,6 @@ export default function Reports() {
       <div className="page-head">
         <div>
           <h1>Reports</h1>
-          <p>Values come from the selected calculation run. Click any amount to drill down to its categories, allocations and source GL × business-area / cost-centre rows.</p>
         </div>
         <div className="row">
           <select aria-label="Run" value={runId ?? ""} onChange={(e) => setRunId(Number(e.target.value))}>
