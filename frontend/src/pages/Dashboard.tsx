@@ -1,13 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, qs } from "../api";
 import { useApp } from "../context";
 import { fmt, pct, UNIT_LABEL } from "../format";
 import type { Kpis, Run } from "../types";
 import { ErrorBox, Loading } from "../components/ui";
-import { Icon } from "../components/icons";
+import { Icon, type IconName } from "../components/icons";
 
 interface DashboardData {
   unit: string;
@@ -25,130 +25,55 @@ interface DashboardData {
   };
 }
 
-// unit written after an amount: ₹738.13 cr
 const UNIT_SHORT: Record<string, string> = { rupees: "", thousand: "'000", lakh: "lakh", million: "mn", crore: "cr" };
-const money = (v: number | null | undefined, unit: string, d = 2) =>
-  `${(v ?? 0) < 0 ? "−" : ""}₹${fmt(v == null ? v : Math.abs(v), d)}${UNIT_SHORT[unit] ? ` ${UNIT_SHORT[unit]}` : ""}`;
-/** small amounts (controls) keep enough decimals to stay visible */
-const smallMoney = (v: number, unit: string) => money(v, unit, Math.abs(v) < 0.01 ? 4 : 2);
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+const money = (v: number | undefined, unit: string, d = 2) =>
+  v === undefined ? "–" : `${v < 0 ? "−" : ""}₹${fmt(Math.abs(v), d)}${UNIT_SHORT[unit] ? ` ${UNIT_SHORT[unit]}` : ""}`;
 
-function Amount({ v, unit, d = 2 }: { v?: number | null; unit: string; d?: number }) {
-  return (
-    <span className={`amount ${(v ?? 0) < 0 ? "neg" : ""}`}>
-      {(v ?? 0) < 0 ? "−" : ""}<span className="cur">₹</span>{fmt(v == null ? v : Math.abs(v), d)}{UNIT_SHORT[unit] ? <span className="unit">{UNIT_SHORT[unit]}</span> : null}
-    </span>
-  );
-}
+// ---------------------------------------------------------------- KPI card
+type Change = { text: string; good: boolean; up: boolean } | null;
 
-/** Variance to budget, coloured by whether it is good news. */
-function Variance({ v, b, unit, higherIsBetter = true }: { v?: number; b?: number; unit: string; higherIsBetter?: boolean }) {
-  if (v === undefined || b === undefined) return null;
-  const diff = v - b;
-  const good = higherIsBetter ? diff >= 0 : diff <= 0;
-  return (
-    <span className={`variance ${good ? "good" : "bad"}`}>
-      {diff >= 0 ? "▲" : "▼"} {money(Math.abs(diff), unit)} vs budget
-    </span>
-  );
-}
-
-function KpiTile({ label, value, unit, sub, budget, higherIsBetter, to }: {
-  label: string; value?: number; unit: string; sub?: string; budget?: number; higherIsBetter?: boolean; to: string;
+function KpiCard({ label, value, unit, icon, change, against, foot, to }: {
+  label: string; value?: number; unit: string; icon: IconName; change: Change; against: string; foot?: string; to: string;
 }) {
   return (
-    <Link to={to} className="kpi-tile">
-      <span className="label">{label}</span>
-      <span className="value"><Amount v={value} unit={unit} /></span>
-      <span className="sub">{sub ?? " "}</span>
-      <Variance v={value} b={budget} unit={unit} higherIsBetter={higherIsBetter} />
+    <Link to={to} className="r-kpi">
+      <div className="r-kpi-top">
+        <span className="r-kpi-label">{label}</span>
+        <span className="r-kpi-icon"><Icon name={icon} size={18} /></span>
+      </div>
+      <div className="r-kpi-value">
+        {value === undefined ? "–" : <>{value < 0 ? "−" : ""}<span className="cur">₹</span>{fmt(Math.abs(value))}<small>{UNIT_SHORT[unit]}</small></>}
+      </div>
+      <div className="r-kpi-foot">
+        {change ? (
+          <span className={`r-chip ${change.good ? "good" : "bad"}`}><Icon name="trend" size={13} className={change.up ? "" : "flip"} />{change.text}</span>
+        ) : null}
+        <span className="muted">{change ? against : foot ?? ""}</span>
+      </div>
     </Link>
   );
 }
 
-// ---------------------------------------------------------------- profit bridge (Sales → PBT)
-type Step = { label: string; value: number; kind: "total" | "up" | "down" };
-const BRIDGE: { key: string; label: string; sign?: 1 | -1 }[] = [
-  { key: "sales", label: "Sales" },
-  { key: "material_cost", label: "Material cost", sign: -1 },
-  { key: "variable_cost", label: "Variable cost", sign: -1 },
-  { key: "gross_margin", label: "Gross margin" },
-  { key: "factory_overhead", label: "Factory overhead", sign: -1 },
-  { key: "pre_factory", label: "People cost – factory", sign: -1 },
-  { key: "plant_profit", label: "Plant profit" },
-  { key: "corporate_overheads", label: "Corporate overhead", sign: -1 },
-  { key: "pre_corporate", label: "People cost – corporate", sign: -1 },
-  { key: "other_credits", label: "Other income / (expense)", sign: 1 },
-  { key: "pbt", label: "Profit before tax" },
-];
-
-function bridgeSteps(c: Kpis): Step[] {
-  const steps: Step[] = [];
-  let running: number | undefined;
-  let pending: Step[] = [];
-  for (const b of BRIDGE) {
-    const v = num(c[b.key]);
-    if (v === undefined) continue;
-    if (!b.sign) {
-      if (running !== undefined) {
-        const moved = pending.reduce((t, s) => t + (s.kind === "up" ? s.value : -s.value), 0);
-        const rest = v - running - moved;
-        if (Math.abs(rest) > 0.005) pending.push({ label: "Other items", value: Math.abs(rest), kind: rest >= 0 ? "up" : "down" });
-        steps.push(...pending);
-      }
-      pending = [];
-      steps.push({ label: b.label, value: v, kind: "total" });
-      running = v;
-    } else if (running !== undefined) {
-      const delta = v * b.sign;
-      pending.push({ label: b.label, value: Math.abs(delta), kind: delta >= 0 ? "up" : "down" });
-    }
-  }
-  return steps;
-}
-
-function ProfitBridge({ c, unit }: { c: Kpis; unit: string }) {
-  const steps = bridgeSteps(c);
-  // positions on a shared scale
-  let run = 0;
-  const bars = steps.map((s) => {
-    let from: number, to: number;
-    if (s.kind === "total") { from = 0; to = s.value; run = s.value; }
-    else if (s.kind === "down") { from = run - s.value; to = run; run -= s.value; }
-    else { from = run; to = run + s.value; run += s.value; }
-    return { ...s, lo: Math.min(from, to), hi: Math.max(from, to) };
-  });
-  const min = Math.min(0, ...bars.map((b) => b.lo));
-  const max = Math.max(...bars.map((b) => b.hi), 1e-9);
-  const pos = (x: number) => ((x - min) / (max - min)) * 100;
-  const sales = num(c.sales);
+// ---------------------------------------------------------------- chart tooltip
+function ChartTip({ active, payload, label, unit }: { active?: boolean; payload?: { name: string; value: number; color: string }[]; label?: string; unit: string }) {
+  if (!active || !payload?.length) return null;
   return (
-    <div className="bridge" role="table" aria-label="Profit bridge from sales to profit before tax">
-      {bars.map((b, i) => (
-        <div key={i} className={`bridge-row ${b.kind}`} role="row">
-          <span className="b-label" role="cell">{b.label}</span>
-          <span className="b-track" role="cell" aria-hidden>
-            {min < 0 ? <i className="zero" style={{ left: `${pos(0)}%` }} /> : null}
-            <i className="bar" style={{ left: `${pos(b.lo)}%`, width: `${Math.max(pos(b.hi) - pos(b.lo), 0.4)}%` }} />
-          </span>
-          <span className="b-value" role="cell">
-            {b.kind === "down" ? "−" : b.kind === "up" ? "+" : ""}{fmt(b.value)}
-            <small>{sales ? pct(b.value / sales) : ""}</small>
-          </span>
-        </div>
+    <div className="r-tip">
+      <div className="r-tip-title">{label}</div>
+      {payload.map((p) => (
+        <div key={p.name} className="r-tip-row"><i style={{ background: p.color }} />{p.name}<strong>{fmt(p.value)}</strong></div>
       ))}
-      <div className="bridge-foot muted small">{UNIT_LABEL[unit]} · % of sales</div>
+      <div className="r-tip-unit">{UNIT_LABEL[unit]}</div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------- page
-type SortKey = "pbt" | "sales" | "pbt_pct" | "gross_margin_pct" | "material_cost_pct";
+type ChartView = "plant" | "period";
 
 export default function Dashboard() {
-  const { companyId, periodId, unit, company } = useApp();
-  const [sort, setSort] = useState<SortKey>("pbt");
+  const { companyId, periodId, unit, periods, company } = useApp();
   const q = useQuery({
     queryKey: ["dashboard", companyId, periodId, unit],
     queryFn: () => api.get<DashboardData>(`/api/companies/${companyId}/dashboard${qs({ period_id: periodId, unit })}`),
@@ -156,11 +81,17 @@ export default function Dashboard() {
   });
   const runId = q.data?.current?.run.id;
   const runQ = useQuery({ queryKey: ["run", runId], queryFn: () => api.get<Run>(`/api/runs/${runId}`), enabled: !!runId });
+  const [view, setView] = useState<ChartView>("plant");
+  const [slide, setSlide] = useState(0);
+  useEffect(() => { if ((q.data?.trend.length ?? 0) >= 2) setView("period"); }, [q.data?.trend.length]);
 
-  const pgs = useMemo(() => {
-    const list = (q.data?.current?.product_groups ?? []).filter((p) => Math.abs(p.sales ?? 0) > 1e-9 || Math.abs(p.pbt ?? 0) > 1e-9);
-    return [...list].sort((a, b) => ((num(b[sort]) ?? -Infinity) - (num(a[sort]) ?? -Infinity)));
-  }, [q.data, sort]);
+  const issues = useMemo(() => (runQ.data?.controls ?? []).filter((x) => x.level !== "ok")
+    .sort((a, b) => (a.level === "error" ? -1 : 1) - (b.level === "error" ? -1 : 1)), [runQ.data]);
+  useEffect(() => {
+    if (issues.length < 2) return;
+    const t = setInterval(() => setSlide((s) => (s + 1) % issues.length), 5000);
+    return () => clearInterval(t);
+  }, [issues.length]);
 
   if (q.error) return <ErrorBox error={q.error} />;
   if (!q.data) return <Loading />;
@@ -168,178 +99,238 @@ export default function Dashboard() {
   const cur = d.current;
   if (!cur) {
     return (
-      <div className="card empty">
-        No calculated period yet. <Link to="/periods">Upload the trial balances</Link>, then <Link to="/runs">run a calculation</Link>.
+      <div className="r-card empty">
+        No calculated period yet. <Link to="/periods">Upload the trial balances</Link> and calculate.
       </div>
     );
   }
   const c = cur.company;
-  const b = cur.budget;
-  const plants = cur.plants.filter((p) => Math.abs(p.sales ?? 0) > 1e-9 || Math.abs(p.pbt ?? 0) > 1e-9);
-  const maxSales = Math.max(...plants.map((p) => p.sales ?? 0), 1e-9);
-  // a % of sales is only shown when sales are at least 0.1% of company sales; otherwise it is not meaningful
-  const material = Math.max(Math.abs(c.sales ?? 0) * 0.001, 0.005);
-  const ofSales = (v: number | null | undefined, sales: number | undefined) => (Math.abs(sales ?? 0) >= material ? pct(v) : "n/m");
-  const isLoss = (v: number | undefined) => (v ?? 0) < -0.005;
-  const maxPbtAbs = Math.max(...pgs.map((p) => Math.abs(p.pbt ?? 0)), 1e-9);
-  const issues = (runQ.data?.controls ?? []).filter((x) => x.level !== "ok").sort((a, b2) => (a.level === "error" ? -1 : 1) - (b2.level === "error" ? -1 : 1));
-  const errors = cur.controls.errors ?? 0;
-  const warnings = cur.controls.warnings ?? 0;
-  const u = unit;
-  // control amounts are in the calculation unit (company setting), not the display unit
+  const sales = num(c.sales) ?? 0;
+
+  // change against the previous calculated period, compared per month so YTD periods of different length are fair
+  const idx = d.trend.findIndex((t) => t.period === cur.period);
+  const prev = idx > 0 ? d.trend[idx - 1] : undefined;
+  const monthsOf = (code: string) => periods.find((p) => p.code === code && p.scenario === "actual")?.months || 1;
+  const mCur = monthsOf(cur.period);
+  const mPrev = prev ? monthsOf(prev.period) : 1;
+  const budget = cur.budget;
+  const against = prev ? `vs ${prev.label}${mCur !== mPrev ? " (per month)" : ""}` : budget ? "vs budget" : "";
+  const change = (key: string, higherIsBetter: boolean): Change => {
+    const v = num(c[key]);
+    if (v === undefined) return null;
+    let base: number | undefined;
+    let now = v;
+    if (prev) { base = num(prev[key]); if (base !== undefined) { base /= mPrev; now = v / mCur; } }
+    else if (budget) base = num(budget[key]);
+    if (base === undefined || Math.abs(base) < 1e-9) return null;
+    const r = (now - base) / Math.abs(base);
+    return { text: `${r >= 0 ? "+" : "−"}${Math.abs(r * 100).toFixed(1)}%`, up: r >= 0, good: higherIsBetter ? r >= 0 : r <= 0 };
+  };
+  const ppChange = (key: string, higherIsBetter: boolean): Change => {
+    const v = num(c[key]);
+    const base = prev ? num(prev[key]) : budget ? num(budget[key]) : undefined;
+    if (v === undefined || base === undefined) return null;
+    const pp = (v - base) * 100;
+    if (Math.abs(pp) < 0.05) return { text: "0.0 pp", up: true, good: true };
+    return { text: `${pp >= 0 ? "+" : "−"}${Math.abs(pp).toFixed(1)} pp`, up: pp >= 0, good: higherIsBetter ? pp >= 0 : pp <= 0 };
+  };
+
+  // chart data
+  // plants with material figures only (a plant with no sales and a few rupees of cost is noise on a chart)
+  const tiny = Math.max(Math.abs(sales) * 0.001, 0.005);
+  const plants = cur.plants.filter((p) => Math.abs(p.sales ?? 0) >= tiny || Math.abs(p.pbt ?? 0) >= tiny);
+  const plantMin = Math.min(0, ...plants.map((p) => Math.min(p.sales ?? 0, p.pbt ?? 0)));
+
+  // cost structure: where each rupee of sales goes
+  const STRUCT: { key: string; label: string; color: string }[] = [
+    { key: "material_cost", label: "Material", color: "#5b4fe9" },
+    { key: "variable_cost", label: "Variable cost", color: "#1f8fff" },
+    { key: "factory_overhead", label: "Factory overhead", color: "#13b56b" },
+    { key: "pre_factory", label: "People – factory", color: "#f59e0b" },
+    { key: "corporate_overheads", label: "Corporate overhead", color: "#38bdf8" },
+    { key: "pre_corporate", label: "People – corporate", color: "#ec4899" },
+  ];
+  const struct = STRUCT.map((s) => ({ ...s, v: num(c[s.key]) })).filter((s) => s.v !== undefined) as (typeof STRUCT[number] & { v: number })[];
+
+  // product groups
+  const material = Math.max(Math.abs(sales) * 0.001, 0.005);
+  const status = (p: Kpis): { label: string; cls: string } => {
+    const pbt = p.pbt ?? 0;
+    if (Math.abs(p.sales ?? 0) < material) return pbt < -0.005 ? { label: "Loss", cls: "bad" } : { label: "No sales", cls: "muted" };
+    if (pbt < -0.005) return { label: "Loss", cls: "bad" };
+    if ((p.pbt_pct ?? 0) < 0.05) return { label: "Thin margin", cls: "warn" };
+    return { label: "Profitable", cls: "good" };
+  };
+  const pgs = cur.product_groups.filter((p) => Math.abs(p.sales ?? 0) > 1e-9 || Math.abs(p.pbt ?? 0) > 1e-9);
+  const counts = pgs.reduce<Record<string, number>>((t, p) => { const s = status(p).label; t[s] = (t[s] ?? 0) + 1; return t; }, {});
+  const withSales = pgs.filter((p) => Math.abs(p.sales ?? 0) >= material).length;
+  const healthy = counts["Profitable"] ?? 0;
+  const health = withSales ? healthy / withSales : 0;
+  const topPgs = [...pgs].sort((a, b) => (b.sales ?? 0) - (a.sales ?? 0)).slice(0, 6);
+  const R = 52, C = 2 * Math.PI * R;
+
+  const issue = issues.length ? issues[slide % issues.length] : null;
+  // control amounts are in the company's calculation unit
   const calcUnit = Object.entries({ rupees: 1, thousand: 1e3, lakh: 1e5, million: 1e6, crore: 1e7 })
     .find(([, v]) => v === company?.settings.calc_unit_divisor)?.[0] ?? "crore";
-  const head = (k: SortKey, label: string) => (
-    <th className="num">
-      <button className={`th-sort ${sort === k ? "on" : ""}`} onClick={() => setSort(k)} aria-sort={sort === k ? "descending" : "none"}>
-        {label}{sort === k ? " ↓" : ""}
-      </button>
-    </th>
-  );
 
   return (
-    <>
-      <div className="page-head">
-        <div>
-          <h1>{company?.name}</h1>
-          <p className="head-meta">
-            <span>Run #{cur.run.id}</span>
-            <span>Amounts in {UNIT_LABEL[u]}</span>
-          </p>
-        </div>
-        <div className="row">
-          <Link className="btn" to={`/runs/${cur.run.id}`}>Run details</Link>
-          <Link className="btn primary" to="/reports"><Icon name="reports" size={15} />Open P&amp;L reports</Link>
-        </div>
-      </div>
-
-      {errors || warnings ? (
-        <div className={`alert ${errors ? "error" : "warning"}`} role="alert">
-          <Icon name="alert" size={18} />
-          <div className="grow">
-            <strong>
-              {errors ? plural(errors, "control error") : ""}{errors && warnings ? " and " : ""}{warnings ? plural(warnings, "warning") : ""}
-              {errors ? " – check before submitting this run" : ""}
-            </strong>
-            {issues.length ? (
-              <ul>
-                {issues.slice(0, 4).map((x) => (
-                  <li key={x.code}><span className={`lvl ${x.level}`}>{x.level}</span>{x.title}
-                    {Math.abs(x.amount) > 1e-9 ? <span className="muted"> · {smallMoney(x.amount, calcUnit)}</span> : null}</li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
-          <Link className="btn small" to={`/runs/${cur.run.id}`}>Review controls</Link>
-        </div>
-      ) : null}
-
-      <section className="kpi-strip" aria-label="Key figures">
-        <KpiTile label="Sales" value={num(c.sales)} unit={u} budget={num(b?.sales)} to="/reports?tab=plant_wise" />
-        <KpiTile label="Material cost" value={num(c.material_cost)} unit={u} sub={`MC ${pct(c.material_cost_pct)} of sales`}
-          budget={num(b?.material_cost)} higherIsBetter={false} to="/reports?tab=mc" />
-        <KpiTile label="Gross margin" value={num(c.gross_margin)} unit={u} sub={`${pct(c.gross_margin_pct)} of sales`} budget={num(b?.gross_margin)} to="/reports?tab=plant_wise" />
-        <KpiTile label="Plant profit" value={num(c.plant_profit)} unit={u} sub={`${pct(c.plant_profit_pct)} of sales`} budget={num(b?.plant_profit)} to="/reports?tab=plant_wise" />
-        <KpiTile label="Profit before tax" value={num(c.pbt)} unit={u} sub={`${pct(c.pbt_pct)} of sales`} budget={num(b?.pbt)} to="/reports?tab=plant_wise" />
-        {num(c.bep_per_month) !== undefined ? <KpiTile label="Break-even sales" value={num(c.bep_per_month)} unit={u} sub="per month" to="/reports?tab=summary" /> : null}
+    <div className="r-dash">
+      <section className="r-kpis">
+        <KpiCard label="Sales" value={num(c.sales)} unit={unit} icon="rupee" change={change("sales", true)} against={against} foot={cur.label} to="/reports?tab=plant_wise" />
+        <KpiCard label="Gross margin" value={num(c.gross_margin)} unit={unit} icon="trend" change={ppChange("gross_margin_pct", true)} against={against}
+          foot={`${pct(c.gross_margin_pct)} of sales`} to="/reports?tab=plant_wise" />
+        <KpiCard label="Profit before tax" value={num(c.pbt)} unit={unit} icon="wallet" change={change("pbt", true)} against={against}
+          foot={`${pct(c.pbt_pct)} of sales`} to="/reports?tab=plant_wise" />
+        <KpiCard label="Material cost" value={num(c.material_cost)} unit={unit} icon="box" change={ppChange("material_cost_pct", false)} against={against}
+          foot={`MC ${pct(c.material_cost_pct)} of sales`} to="/reports?tab=mc" />
       </section>
 
-      <div className="dash-grid">
-        <div className="card">
-          <div className="card-head">
-            <div><h2>Profit bridge</h2><div className="muted small">How sales turn into profit before tax · company</div></div>
-          </div>
-          <ProfitBridge c={c} unit={u} />
-        </div>
-
-        <div className="card">
-          <div className="card-head">
-            <div><h2>Plants</h2><div className="muted small">Sales and profit before tax</div></div>
-            <Link className="small" to="/reports?tab=plant_wise">Plant-wise P&amp;L</Link>
-          </div>
-          <div className="plant-list">
-            {plants.map((p) => (
-              <Link key={p.plant} to="/reports?tab=pg_wise" className="plant-row">
-                <span className="code">{p.plant}</span>
-                <span className="track" aria-hidden><i style={{ width: `${Math.max(((p.sales ?? 0) / maxSales) * 100, 0)}%` }} /></span>
-                <span className="vals">
-                  <span>{fmt(p.sales)} <small>sales</small></span>
-                  <span className={isLoss(p.pbt) ? "neg" : ""}>{fmt(p.pbt)} <small>PBT · {ofSales(p.pbt_pct, p.sales)}</small></span>
-                </span>
-              </Link>
-            ))}
-            {!plants.length ? <div className="muted">No plant has sales in this period.</div> : null}
-            <div className="muted small">{UNIT_LABEL[u]} · plants without sales or profit are hidden</div>
-          </div>
-        </div>
-      </div>
-
-      {d.trend.length >= 2 ? (
-        <div className="card">
-          <div className="card-head">
-            <div><h2>Trend</h2><div className="muted small">Calculated periods · {UNIT_LABEL[u]}</div></div>
-            <div className="legend">
-              <span><i style={{ background: "var(--series-1)" }} />Sales</span>
-              <span><i style={{ background: "var(--series-2)" }} />Gross margin</span>
-              <span><i style={{ background: "var(--series-3)" }} />Profit before tax</span>
+      <div className="r-grid">
+        <section className="r-card r-chart">
+          <div className="r-card-head">
+            <div>
+              <h2>Profitability</h2>
+              <p>{view === "plant" ? `Sales and profit before tax by plant · ${cur.label}` : "Sales and profit before tax across calculated periods"}</p>
             </div>
+            <label className="r-select">
+              <Icon name={view === "plant" ? "factory" : "calc"} size={15} />
+              <select value={view} onChange={(e) => setView(e.target.value as ChartView)} aria-label="Chart view">
+                <option value="plant">By plant</option>
+                <option value="period" disabled={d.trend.length < 2}>By period{d.trend.length < 2 ? " (needs 2 periods)" : ""}</option>
+              </select>
+            </label>
           </div>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={d.trend} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
-              <CartesianGrid stroke="var(--grid)" vertical={false} />
-              <XAxis dataKey="label" tick={{ fill: "var(--text-2)", fontSize: 12 }} axisLine={{ stroke: "var(--border)" }} tickLine={false} />
-              <YAxis tick={{ fill: "var(--text-2)", fontSize: 12 }} axisLine={false} tickLine={false} width={60} tickFormatter={(v: number) => (v === 0 ? "0" : fmt(v, 0))} />
-              <Tooltip formatter={(v: number) => fmt(v)} contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)" }} />
-              <Line type="monotone" dataKey="sales" name="Sales" stroke="var(--series-1)" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
-              <Line type="monotone" dataKey="gross_margin" name="Gross margin" stroke="var(--series-2)" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
-              <Line type="monotone" dataKey="pbt" name="Profit before tax" stroke="var(--series-3)" strokeWidth={2} dot={{ r: 3 }} isAnimationActive={false} />
-            </LineChart>
+          <div className="r-legend">
+            <span><i style={{ background: "var(--r-indigo)" }} />Sales</span>
+            <span><i style={{ background: "var(--r-green)" }} />Profit before tax</span>
+          </div>
+          <ResponsiveContainer width="100%" height={290}>
+            {view === "plant" ? (
+              <BarChart data={plants} margin={{ top: 10, right: 8, left: 0, bottom: 0 }} barGap={6} barCategoryGap="30%">
+                <CartesianGrid stroke="var(--grid)" strokeDasharray="4 6" vertical={false} />
+                <XAxis dataKey="plant" tick={{ fill: "var(--text-2)", fontSize: 13 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "var(--text-3)", fontSize: 12 }} axisLine={false} tickLine={false} width={56} tickFormatter={(v: number) => (v === 0 ? "0" : fmt(v, 0))}
+                  domain={[plantMin < 0 ? "auto" : 0, "auto"]} />
+                <Tooltip content={<ChartTip unit={unit} />} cursor={{ fill: "var(--r-hover)" }} />
+                <ReferenceLine y={0} stroke="var(--border-strong)" />
+                <Bar dataKey="sales" name="Sales" fill="var(--r-indigo)" radius={[8, 8, 0, 0]} maxBarSize={46} isAnimationActive={false} />
+                <Bar dataKey="pbt" name="Profit before tax" fill="var(--r-green)" radius={[8, 8, 0, 0]} maxBarSize={46} isAnimationActive={false} />
+              </BarChart>
+            ) : (
+              <LineChart data={d.trend} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid stroke="var(--grid)" strokeDasharray="4 6" horizontal={false} />
+                <XAxis dataKey="label" tick={{ fill: "var(--text-2)", fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "var(--text-3)", fontSize: 12 }} axisLine={false} tickLine={false} width={56} tickFormatter={(v: number) => (v === 0 ? "0" : fmt(v, 0))} />
+                <Tooltip content={<ChartTip unit={unit} />} cursor={{ stroke: "var(--text)", strokeWidth: 1.5 }} />
+                <Line type="linear" dataKey="sales" name="Sales" stroke="var(--r-indigo)" strokeWidth={2.2} dot={{ r: 5, fill: "var(--surface)", strokeWidth: 2 }} activeDot={{ r: 6 }} isAnimationActive={false} />
+                <Line type="linear" dataKey="pbt" name="Profit before tax" stroke="var(--r-green)" strokeWidth={2.2} dot={{ r: 5, fill: "var(--surface)", strokeWidth: 2 }} activeDot={{ r: 6 }} isAnimationActive={false} />
+              </LineChart>
+            )}
           </ResponsiveContainer>
-        </div>
-      ) : null}
+        </section>
 
-      <div className="card flush">
-        <div className="card-head" style={{ padding: "16px 18px 6px" }}>
-          <div><h2>Product groups</h2><div className="muted small">All plants · {UNIT_LABEL[u]} · click a column to sort · losses and margins under 5% are flagged · n/m = not meaningful (no sales)</div></div>
-          <Link className="small" to="/reports?tab=all_pg">All-PG report</Link>
-        </div>
-        <div className="table-wrap">
-          <table className="data pg-table">
-            <thead>
-              <tr>
-                <th>Product group</th>
-                {head("sales", "Sales")}
-                {head("material_cost_pct", "MC %")}
-                {head("gross_margin_pct", "GM %")}
-                {head("pbt", "PBT")}
-                {head("pbt_pct", "PBT %")}
-                <th className="bar-col" aria-label="PBT compared" />
-              </tr>
-            </thead>
-            <tbody>
-              {pgs.map((p) => {
-                const pbt = p.pbt ?? 0;
-                const meaningful = Math.abs(p.sales ?? 0) >= material;
-                const flag = isLoss(pbt) ? "Loss" : meaningful && (p.pbt_pct ?? 0) < 0.05 ? "Thin margin" : !meaningful ? "No sales" : "";
-                const w = (Math.abs(pbt) / maxPbtAbs) * 50;
+        <div className="r-side">
+          <section className={`r-card r-checks ${issue ? (issue.level === "error" ? "has-error" : "has-warning") : "all-ok"}`}>
+            <div className="r-card-head">
+              <h2><Icon name="sparkle" size={18} />Calculation checks</h2>
+              <Link className="r-btn light" to={`/runs/${cur.run.id}`}>View all<Icon name="chevron" size={14} className="rot-l" /></Link>
+            </div>
+            <div className="r-check-pill">
+              <span className={`r-check-icon ${issue ? issue.level : "ok"}`}><Icon name={issue ? "alert" : "check"} size={18} /></span>
+              <div>
+                {issue ? (
+                  <>
+                    <strong>{issue.title}</strong>
+                    <small>{issue.level === "error" ? "Error" : "Warning"}{Math.abs(issue.amount) > 1e-9 ? ` · ${money(issue.amount, calcUnit, Math.abs(issue.amount) < 0.01 ? 4 : 2)}` : ""} · run #{cur.run.id}</small>
+                  </>
+                ) : (
+                  <>
+                    <strong>All controls passed</strong>
+                    <small>Run #{cur.run.id} · {cur.label}</small>
+                  </>
+                )}
+              </div>
+            </div>
+            {issues.length > 1 ? (
+              <div className="r-dots" role="tablist" aria-label="Checks">
+                {issues.map((x, i) => (
+                  <button key={x.code} className={i === slide % issues.length ? "on" : ""} onClick={() => setSlide(i)} aria-label={x.title} />
+                ))}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="r-card">
+            <div className="r-card-head">
+              <div><h2>Cost structure</h2><p>Share of sales · company</p></div>
+            </div>
+            <div className="r-bars">
+              {struct.map((s) => {
+                const share = sales ? s.v / sales : 0;
                 return (
-                  <tr key={p.pg} className={isLoss(pbt) ? "loss" : ""}>
-                    <td><strong>{p.pg}</strong>{flag ? <span className={`flag ${isLoss(pbt) ? "bad" : flag === "No sales" ? "info" : "warn"}`}>{flag}</span> : null}</td>
-                    <td className="num">{fmt(p.sales)}</td>
-                    <td className="num">{ofSales(p.material_cost_pct, p.sales)}</td>
-                    <td className="num">{ofSales(p.gross_margin_pct, p.sales)}</td>
-                    <td className={`num ${isLoss(pbt) ? "neg" : ""}`}>{fmt(p.pbt)}</td>
-                    <td className="num">{ofSales(p.pbt_pct, p.sales)}</td>
-                    <td className="bar-col" aria-hidden>
-                      <span className="pbt-bar"><i className={pbt < 0 ? "neg" : ""} style={pbt < 0 ? { right: "50%", width: `${w}%` } : { left: "50%", width: `${w}%` }} /></span>
-                    </td>
-                  </tr>
+                  <div key={s.key} className="r-bar-row">
+                    <span className="r-bar-label">{s.label}</span>
+                    <span className="r-bar-track"><i style={{ width: `${Math.min(Math.max(share, 0), 1) * 100}%`, background: s.color }} /></span>
+                    <span className="r-bar-value">{pct(share)}</span>
+                  </div>
                 );
               })}
-            </tbody>
-          </table>
+            </div>
+          </section>
         </div>
       </div>
-    </>
+
+      <div className="r-grid">
+        <section className="r-card flush">
+          <div className="r-card-head pad">
+            <div><h2>Product groups</h2><p>Largest by sales · {UNIT_LABEL[unit]}</p></div>
+            <Link className="r-btn" to="/reports?tab=all_pg">View all<Icon name="chevron" size={14} className="rot-l" /></Link>
+          </div>
+          <div className="r-table-wrap">
+            <table className="r-table">
+              <thead><tr><th>Product group</th><th className="num">Sales</th><th className="num">GM %</th><th className="num">PBT</th><th>Status</th></tr></thead>
+              <tbody>
+                {topPgs.map((p) => {
+                  const st = status(p);
+                  const meaningful = Math.abs(p.sales ?? 0) >= material;
+                  return (
+                    <tr key={p.pg}>
+                      <td>{p.pg}</td>
+                      <td className="num">{fmt(p.sales)}</td>
+                      <td className="num">{meaningful ? pct(p.gross_margin_pct) : "n/m"}</td>
+                      <td className={`num ${(p.pbt ?? 0) < -0.005 ? "neg" : ""}`}>{fmt(p.pbt)}</td>
+                      <td><span className={`r-pill ${st.cls}`}>{st.label}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="r-card r-health">
+          <div className="r-card-head">
+            <div><h2>Product-group health</h2><p>Profitability of groups with sales</p></div>
+          </div>
+          <div className="r-health-body">
+            <div className="r-ring" aria-label={`${Math.round(health * 100)}% of product groups profitable`}>
+              <svg viewBox="0 0 128 128" width="138" height="138" aria-hidden>
+                <circle cx="64" cy="64" r={R} fill="none" stroke="var(--surface-3)" strokeWidth="12" />
+                <circle cx="64" cy="64" r={R} fill="none" stroke="var(--r-green)" strokeWidth="12" strokeLinecap="round"
+                  strokeDasharray={`${C * health} ${C}`} transform="rotate(-90 64 64)" />
+              </svg>
+              <span className="r-ring-value">{Math.round(health * 100)}%</span>
+            </div>
+            <span className="r-divider" aria-hidden />
+            <ul className="r-health-list">
+              <li><span className="r-face good"><Icon name="check" size={14} /></span>Profitable<strong>{counts["Profitable"] ?? 0}</strong></li>
+              <li><span className="r-face warn"><Icon name="percent" size={13} /></span>Thin margin<strong>{counts["Thin margin"] ?? 0}</strong></li>
+              <li><span className="r-face bad"><Icon name="alert" size={13} /></span>Loss<strong>{counts["Loss"] ?? 0}</strong></li>
+            </ul>
+          </div>
+        </section>
+      </div>
+    </div>
   );
 }
